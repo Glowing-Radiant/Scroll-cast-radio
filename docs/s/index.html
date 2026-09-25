@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scroll Cast Radio</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; background: #000; color: #fff;
+         font: 18px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         display: flex; align-items: center; }
+  main { width: 100%; max-width: 560px; margin: 0 auto; padding: 32px 24px; box-sizing: border-box; }
+  h1 { font-size: 2.2rem; line-height: 1.15; margin: 0 0 12px; }
+  .meta { color: #cfcfcf; margin: 0 0 32px; }
+  .btn { display: block; box-sizing: border-box; width: 100%; padding: 16px; margin: 0 0 14px;
+         border-radius: 999px; text-align: center; font-weight: 600; font-size: 1.05rem;
+         text-decoration: none; border: 2px solid #ffc857; }
+  .primary { background: #ffc857; color: #000; }
+  .secondary { color: #ffc857; background: transparent; }
+  .btn:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  audio { width: 100%; margin: 8px 0 20px; }
+  .small { color: #9e9e9e; font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <p class="small">Scroll Cast Radio</p>
+  <h1 id="name">Loading station…</h1>
+  <p class="meta" id="meta" aria-live="polite"></p>
+
+  <a class="btn primary" id="open-app" href="#">Open in Scroll Cast Radio</a>
+  <div id="player" hidden>
+    <audio id="audio" controls preload="none" aria-label="Station stream"></audio>
+  </div>
+  <a class="btn secondary" id="stream" href="#" hidden>Open stream in another player</a>
+  <p class="small">Stations come from the community-run Radio Browser directory.</p>
+</main>
+<script>
+(function () {
+  var PACKAGE = "com.scrollcast.radio";
+  var MIRRORS = ["de1.api.radio-browser.info", "de2.api.radio-browser.info", "all.api.radio-browser.info"];
+  var id = new URLSearchParams(location.search).get("id") || "";
+  var valid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  var nameEl = document.getElementById("name");
+  var metaEl = document.getElementById("meta");
+  var openApp = document.getElementById("open-app");
+
+  if (!valid) {
+    nameEl.textContent = "This station link isn't valid.";
+    openApp.hidden = true;
+    return;
+  }
+
+  var isAndroid = /android/i.test(navigator.userAgent);
+  var schemeUrl = "scrollcast://station/" + id;
+  openApp.href = isAndroid
+    ? "intent://station/" + id + "#Intent;scheme=scrollcast;package=" + PACKAGE +
+      ";S.browser_fallback_url=" + encodeURIComponent(location.href.split("#")[0] + "#noapp") + ";end"
+    : schemeUrl;
+  if (!isAndroid) openApp.hidden = true;
+
+  // Try the app straight away on Android, unless we just came back from a failed attempt.
+  if (isAndroid && location.hash !== "#noapp") location.href = openApp.href;
+
+  function fetchStation(i) {
+    if (i >= MIRRORS.length) return Promise.reject(new Error("unreachable"));
+    return fetch("https://" + MIRRORS[i] + "/json/stations/byuuid/" + id)
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .catch(function () { return fetchStation(i + 1); });
+  }
+
+  fetchStation(0).then(function (list) {
+    var s = list && list[0];
+    if (!s) { nameEl.textContent = "Station not found."; return; }
+    var name = (s.name || "Unnamed station").trim();
+    document.title = name + " · Scroll Cast Radio";
+    nameEl.textContent = name;
+    metaEl.textContent = [s.country, (s.tags || "").split(",").slice(0, 3).join(", ")]
+      .filter(Boolean).join(" · ");
+    var stream = s.url_resolved || s.url;
+    var link = document.getElementById("stream");
+    link.href = stream;
+    link.hidden = false;
+    // Browsers block plain-http audio on an https page, so only embed secure streams.
+    if (stream.indexOf("https://") === 0) {
+      document.getElementById("audio").src = stream;
+      document.getElementById("player").hidden = false;
+    }
+  }).catch(function () {
+    nameEl.textContent = "Couldn't load the station right now.";
+  });
+})();
+</script>
+</body>
+</html>
