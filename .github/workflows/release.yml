@@ -39,7 +39,7 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          ./gradlew testReleaseUnitTest assembleRelease -PappVersionName="$VERSION" --console=plain
+          ./gradlew testDebugUnitTest assembleRelease -PappVersionName="$VERSION" --console=plain
           APK="ScrollCastRadio-$VERSION.apk"
           cp app/build/outputs/apk/release/app-release.apk "$APK"
           # Refuse to publish anything that isn't signed with the release key.
