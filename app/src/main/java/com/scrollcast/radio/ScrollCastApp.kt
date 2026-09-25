@@ -8,6 +8,7 @@ import com.scrollcast.radio.data.FeedRepository
 import com.scrollcast.radio.data.RadioBrowserClient
 import com.scrollcast.radio.data.RegionDetector
 import com.scrollcast.radio.data.SettingsStore
+import com.scrollcast.radio.playback.QueueState
 import com.scrollcast.radio.update.AppUpdater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -46,6 +47,7 @@ class AppGraph(context: Context) {
     val feed = FeedRepository(api, catalog, settings, region)
     val favorites = FavoritesStore(context, json, scope)
     val updater = AppUpdater(context, http, json)
+    val queue = QueueState()
 
     companion object {
         val USER_AGENT = "ScrollCastRadio/${BuildConfig.VERSION_NAME}"

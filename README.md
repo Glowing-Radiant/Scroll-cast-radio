@@ -13,7 +13,8 @@ station, like reels. It's minimal by design and fully usable with TalkBack.
   actually have stations, with station counts. Region and Language each have a mode: *Only*,
   *Mostly* (about 70%) or *Worldwide / Any*. The default is **Mostly [detected region]** in any
   language. Changes apply when you leave Settings.
-- **Tabs**: Feed and Favorites (stored on the device).
+- **Tabs**: Feed and Favorites. Favorites is a feed of its own: swipe (or use headset and
+  lock-screen buttons) through your favorite stations. Going back to Feed resumes where you were.
 - **Share** in two modes:
   - *App link*: `<pages site>/s/?id=<uuid>` opens the station in the app, or shows it in the
     browser when the app isn't installed. `scrollcast://station/<uuid>` also works.
@@ -43,7 +44,8 @@ with GitHub Pages from branch `main`, folder `/docs`.
 "Tell us your mood" at the top of the feed takes any keyword, e.g. `hindi`, `romantic`,
 `hip hop` or `romantic hindi`. Words that name a language or country become strict filters; the
 rest matches genres loosely. If nothing matches, the app searches station names worldwide.
-Clearing the mood returns the feed to your Settings.
+Clearing the mood returns the feed to your Settings. The box always opens empty; the
+current mood is shown under it.
 
 ## Releases and updates
 - **CI** (`.github/workflows/ci.yml`) runs the unit tests and builds a debug APK on every push.

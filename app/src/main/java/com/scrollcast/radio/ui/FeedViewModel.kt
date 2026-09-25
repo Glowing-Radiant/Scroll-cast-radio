@@ -15,7 +15,11 @@ import com.scrollcast.radio.data.CatalogEntry
 import com.scrollcast.radio.data.FeedPrefs
 import com.scrollcast.radio.data.ShareLinks
 import com.scrollcast.radio.data.Station
+import androidx.media3.common.C
 import com.scrollcast.radio.playback.PlaybackService
+import com.scrollcast.radio.playback.QueueMode
+import com.scrollcast.radio.playback.queue
+import com.scrollcast.radio.playback.stationId
 import com.scrollcast.radio.playback.toFallbackStation
 import com.scrollcast.radio.playback.toMediaItem
 import com.scrollcast.radio.update.UpdateInfo
@@ -34,6 +38,8 @@ data class PlayerUiState(
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val hasError: Boolean = false,
+    /** Which feed the player currently holds. */
+    val queue: QueueMode = QueueMode.Feed,
 ) {
     val current: Station? get() = stations.getOrNull(currentIndex)
 }
@@ -85,14 +91,18 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     private val _updatePromptDismissed = MutableStateFlow(false)
     val updatePromptDismissed: StateFlow<Boolean> = _updatePromptDismissed.asStateFlow()
 
+    /** Which feed the player holds; the Favorites tab switches it. */
+    val queueMode: StateFlow<QueueMode> = graph.queue.mode
+
     private var announcedId: String? = null
-    private var skippedDeadStation = false
+    /** Spoken before the next station's summary, e.g. "Favorites." after switching tabs. */
+    private var announcePrefix = ""
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = sync(player)
 
         override fun onPlayerError(error: PlaybackException) {
-            skippedDeadStation = true
+            announcePrefix = "Previous station didn't respond. "
             val c = controller ?: return
             if (c.mediaItemCount <= 1) announce("This station isn't responding. Swipe for another.")
         }
@@ -133,7 +143,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     private fun sync(p: Player) {
         val stations = (0 until p.mediaItemCount).map { i ->
             val item = p.getMediaItemAt(i)
-            graph.feed.cached(item.mediaId) ?: item.toFallbackStation()
+            graph.feed.cached(item.stationId) ?: item.toFallbackStation()
         }
         val state = PlayerUiState(
             stations = stations,
@@ -141,15 +151,15 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
             isPlaying = p.isPlaying,
             isBuffering = p.playbackState == Player.STATE_BUFFERING,
             hasError = p.playerError != null,
+            queue = p.currentMediaItem?.queue ?: QueueMode.Feed,
         )
         _player.value = state
 
         val current = state.current ?: return
         if (current.uuid != announcedId) {
             announcedId = current.uuid
-            val prefix = if (skippedDeadStation) "Previous station didn't respond. " else ""
-            skippedDeadStation = false
-            announce(prefix + current.spokenSummary)
+            announce(announcePrefix + current.spokenSummary)
+            announcePrefix = ""
         }
     }
 
@@ -176,6 +186,8 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         if (c.hasNextMediaItem()) {
             c.seekToNextMediaItem()
             c.resume()
+        } else if (graph.queue.mode.value == QueueMode.Favorites) {
+            announce("This is the last favorite.")
         } else {
             announce("Loading more stations.")
             graph.feed.requestMore()
@@ -200,10 +212,10 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     /** Puts [station] right after the current one and starts it (favorites, shared links). */
     fun play(station: Station) = withController { c ->
         graph.feed.remember(station)
-        val existing = (0 until c.mediaItemCount).firstOrNull { c.getMediaItemAt(it).mediaId == station.uuid }
+        val existing = (0 until c.mediaItemCount).firstOrNull { c.getMediaItemAt(it).stationId == station.uuid }
         val index = existing ?: run {
             val at = if (c.mediaItemCount == 0) 0 else c.currentMediaItemIndex + 1
-            c.addMediaItem(at, station.toMediaItem())
+            c.addMediaItem(at, station.toMediaItem(graph.queue.mode.value))
             at
         }
         c.seekToDefaultPosition(index)
@@ -215,6 +227,51 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
             val station = graph.feed.stationById(uuid)
             if (station == null) announce("Couldn't find the shared station.") else play(station)
         }
+    }
+
+    // --- Feed / Favorites switching -----------------------------------------------------------
+
+    /**
+     * Makes the favorites the player's playlist, parking the discovery feed. Swipes, headset
+     * and lock-screen buttons then move through favorites. Starts on the playing station if
+     * it's a favorite.
+     */
+    fun showFavorites() = withController { c ->
+        val queue = graph.queue
+        val favorites = graph.favorites.stations.value
+        if (queue.mode.value == QueueMode.Favorites || favorites.isEmpty()) return@withController
+        queue.parkedFeed = (0 until c.mediaItemCount).map { c.getMediaItemAt(it).stationId }
+        queue.parkedIndex = c.currentMediaItemIndex
+        queue.mode.value = QueueMode.Favorites
+
+        favorites.forEach(graph.feed::remember)
+        val currentId = c.currentMediaItem?.stationId
+        val start = favorites.indexOfFirst { it.uuid == currentId }.coerceAtLeast(0)
+        val keepPlaying = c.playWhenReady || c.mediaItemCount == 0
+        announcedId = null
+        announcePrefix = "Favorites, ${favorites.size} ${if (favorites.size == 1) "station" else "stations"}. "
+        c.setMediaItems(favorites.map { it.toMediaItem(QueueMode.Favorites) }, start, C.TIME_UNSET)
+        c.prepare()
+        c.playWhenReady = keepPlaying
+    }
+
+    /** Returns the player to the discovery feed, where it was left. */
+    fun showFeed() = withController { c ->
+        val queue = graph.queue
+        if (queue.mode.value == QueueMode.Feed) return@withController
+        queue.mode.value = QueueMode.Feed
+        val items = queue.parkedFeed.mapNotNull { id -> graph.feed.cached(id)?.toMediaItem() }
+        val keepPlaying = c.playWhenReady
+        announcedId = null
+        announcePrefix = "Feed. "
+        if (items.isEmpty()) {
+            c.clearMediaItems() // the service notices the empty feed and loads a fresh one
+        } else {
+            c.setMediaItems(items, queue.parkedIndex.coerceIn(0, items.size - 1), C.TIME_UNSET)
+            c.prepare()
+            c.playWhenReady = keepPlaying
+        }
+        queue.parkedFeed = emptyList()
     }
 
     // --- Favorites, sharing, filters ---------------------------------------------------------

@@ -66,6 +66,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.scrollcast.radio.data.Station
+import com.scrollcast.radio.playback.QueueMode
+import kotlinx.coroutines.flow.drop
 
 @Composable
 fun FeedScreen(
@@ -73,63 +75,24 @@ fun FeedScreen(
     onOpenSettings: () -> Unit,
 ) {
     val state by vm.player.collectAsStateWithLifecycle()
-    val favoriteIds by vm.favoriteIds.collectAsStateWithLifecycle()
     val loading by vm.feedLoading.collectAsStateWithLifecycle()
     val error by vm.feedError.collectAsStateWithLifecycle()
     val mood by vm.mood.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    var shareTarget by remember { mutableStateOf<Station?>(null) }
     var moodDialogOpen by rememberSaveable { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().semantics { paneTitle = "Station feed" }) {
-        if (state.stations.isEmpty()) {
-            EmptyFeed(
+        when {
+            // Still switching back from the favorites feed.
+            state.queue != QueueMode.Feed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+            state.stations.isEmpty() -> EmptyFeed(
                 loading = loading,
                 error = error,
                 onRetry = vm::retry,
                 onClearMood = if (mood != null) ({ vm.setMood(null) }) else null,
             )
-        } else {
-            val pagerState = rememberPagerState(initialPage = state.currentIndex) { state.stations.size }
-
-            // Swipes drive the player...
-            LaunchedEffect(pagerState) {
-                snapshotFlow { pagerState.settledPage }.collect(vm::onPageSettled)
-            }
-            // ...and the player (headset buttons, auto-skip, favorites) drives the pager.
-            LaunchedEffect(state.currentIndex, state.stations.size) {
-                if (pagerState.currentPage != state.currentIndex && !pagerState.isScrollInProgress) {
-                    pagerState.animateScrollToPage(state.currentIndex)
-                }
-            }
-
-            VerticalPager(
-                state = pagerState,
-                key = { page -> state.stations.getOrNull(page)?.uuid ?: page },
-                beyondViewportPageCount = 1,
-                modifier = Modifier.fillMaxSize(),
-            ) { page ->
-                val station = state.stations[page]
-                val isCurrent = page == state.currentIndex
-                StationPage(
-                    station = station,
-                    status = when {
-                        !isCurrent -> PlayStatus.Paused
-                        state.hasError -> PlayStatus.Failed
-                        state.isBuffering -> PlayStatus.Loading
-                        state.isPlaying -> PlayStatus.Playing
-                        else -> PlayStatus.Paused
-                    },
-                    isFavorite = station.uuid in favoriteIds,
-                    onTogglePlay = vm::togglePlay,
-                    onNext = vm::next,
-                    onPrevious = vm::previous,
-                    onToggleFavorite = { vm.toggleFavorite(station) },
-                    onShare = { shareTarget = station },
-                    onShareApp = { shareText(context, vm.appShareText(station)) },
-                    onShareDirect = { shareText(context, vm.directShareText(station)) },
-                )
-            }
+            else -> StationPager(vm, state)
         }
 
         Row(
@@ -158,6 +121,57 @@ fun FeedScreen(
             onPlay = { moodDialogOpen = false; vm.setMood(it) },
             onClear = { moodDialogOpen = false; vm.setMood(null) },
             onDismiss = { moodDialogOpen = false },
+        )
+    }
+}
+
+/**
+ * Full-screen vertical pager over whatever the player is playing (the discovery feed or the
+ * favorites feed). Swipes drive the player; the player (headset, auto-skip) drives the pager.
+ */
+@Composable
+fun StationPager(vm: FeedViewModel, state: PlayerUiState) {
+    val favoriteIds by vm.favoriteIds.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var shareTarget by remember { mutableStateOf<Station?>(null) }
+    val pagerState = rememberPagerState(initialPage = state.currentIndex) { state.stations.size }
+
+    LaunchedEffect(pagerState) {
+        // drop(1): the first value is just the starting page, not a swipe.
+        snapshotFlow { pagerState.settledPage }.drop(1).collect(vm::onPageSettled)
+    }
+    LaunchedEffect(state.currentIndex, state.stations.size) {
+        if (pagerState.currentPage != state.currentIndex && !pagerState.isScrollInProgress) {
+            pagerState.animateScrollToPage(state.currentIndex)
+        }
+    }
+
+    VerticalPager(
+        state = pagerState,
+        // Position + id: a narrow feed that loops can hold the same station more than once.
+        key = { page -> "$page:${state.stations.getOrNull(page)?.uuid}" },
+        beyondViewportPageCount = 1,
+        modifier = Modifier.fillMaxSize(),
+    ) { page ->
+        val station = state.stations[page]
+        val isCurrent = page == state.currentIndex
+        StationPage(
+            station = station,
+            status = when {
+                !isCurrent -> PlayStatus.Paused
+                state.hasError -> PlayStatus.Failed
+                state.isBuffering -> PlayStatus.Loading
+                state.isPlaying -> PlayStatus.Playing
+                else -> PlayStatus.Paused
+            },
+            isFavorite = station.uuid in favoriteIds,
+            onTogglePlay = vm::togglePlay,
+            onNext = vm::next,
+            onPrevious = vm::previous,
+            onToggleFavorite = { vm.toggleFavorite(station) },
+            onShare = { shareTarget = station },
+            onShareApp = { shareText(context, vm.appShareText(station)) },
+            onShareDirect = { shareText(context, vm.directShareText(station)) },
         )
     }
 
@@ -279,7 +293,8 @@ private fun MoodDialog(
     onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var text by rememberSaveable { mutableStateOf(current.orEmpty()) }
+    // Always starts empty: a new mood, not an edit of the old one.
+    var text by rememberSaveable { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     val submit = { if (text.isNotBlank()) onPlay(text) }
@@ -293,7 +308,10 @@ private fun MoodDialog(
                     value = text,
                     onValueChange = { text = it },
                     label = { Text("Mood") },
-                    supportingText = { Text("For example: hindi, romantic, hip hop") },
+                    supportingText = {
+                        Text(current?.let { "Now: $it. For example: hindi, romantic, hip hop" }
+                            ?: "For example: hindi, romantic, hip hop")
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { submit() }),

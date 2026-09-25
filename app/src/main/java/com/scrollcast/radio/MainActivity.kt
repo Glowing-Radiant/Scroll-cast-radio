@@ -23,6 +23,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -58,6 +59,11 @@ class MainActivity : ComponentActivity() {
             ScrollCastTheme {
                 var tab by rememberSaveable { mutableStateOf(Tab.Feed) }
                 var settingsOpen by rememberSaveable { mutableStateOf(false) }
+
+                // Each tab is its own feed: switching tabs switches what the player plays through.
+                LaunchedEffect(tab) {
+                    if (tab == Tab.Favorites) vm.showFavorites() else vm.showFeed()
+                }
 
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                   // A plain Box: Surface stretches its direct children to full screen, which would
@@ -97,7 +103,7 @@ class MainActivity : ComponentActivity() {
                                         vm.startEditingSettings()
                                         settingsOpen = true
                                     })
-                                    Tab.Favorites -> FavoritesScreen(vm, onPlayed = { tab = Tab.Feed })
+                                    Tab.Favorites -> FavoritesScreen(vm)
                                 }
                             }
                         }

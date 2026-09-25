@@ -84,12 +84,19 @@ class PlaybackService : MediaSessionService() {
 
     /** Appends a batch when fewer than [PREFETCH_AHEAD] stations are queued after the current one. */
     private fun ensureAhead(player: Player, force: Boolean = false) {
+        // The favorites feed is a fixed list; only the discovery feed grows.
+        if (graph.queue.mode.value != QueueMode.Feed) return
         if (loadJob?.isActive == true) return
         val remaining = player.mediaItemCount - player.currentMediaItemIndex - 1
         if (!force && remaining >= PREFETCH_AHEAD) return
         loadJob = scope.launch {
             val batch = graph.feed.nextBatch()
             if (batch.isEmpty()) return@launch
+            if (graph.queue.mode.value != QueueMode.Feed) {
+                // Switched to favorites while loading: keep the batch for when the feed returns.
+                graph.queue.parkedFeed = graph.queue.parkedFeed + batch.map { it.uuid }
+                return@launch
+            }
             val wasEmpty = player.mediaItemCount == 0
             player.addMediaItems(batch.map { it.toMediaItem() })
             if (wasEmpty) {
@@ -102,6 +109,12 @@ class PlaybackService : MediaSessionService() {
     private fun resetFeed(player: Player) {
         loadJob?.cancel()
         graph.feed.resetServed()
+        if (graph.queue.mode.value == QueueMode.Favorites) {
+            // Leave the favorites playing; the feed rebuilds when the user goes back to it.
+            graph.queue.parkedFeed = emptyList()
+            graph.queue.parkedIndex = 0
+            return
+        }
         player.clearMediaItems()
         ensureAhead(player)
     }
@@ -114,7 +127,7 @@ class PlaybackService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState != Player.STATE_READY) return
             consecutiveErrors = 0
-            val id = player.currentMediaItem?.mediaId ?: return
+            val id = player.currentMediaItem?.stationId ?: return
             if (clicked.add(id)) scope.launch { graph.feed.countClick(id) }
         }
 
@@ -136,7 +149,7 @@ class PlaybackService : MediaSessionService() {
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(
             mediaItems.map { item ->
-                graph.feed.cached(item.mediaId)?.toMediaItem()
+                graph.feed.cached(item.stationId)?.toMediaItem(item.queue)
                     ?: item.buildUpon().setUri(item.requestMetadata.mediaUri).build()
             }.toMutableList()
         )
