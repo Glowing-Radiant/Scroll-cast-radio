@@ -2,6 +2,9 @@
 
 Each version's section is shown in the app's update screen, so write it for listeners.
 
+## 0.4.1
+- Fixed: sound cut out when Even out loudness and Bass boost were both on. All audio enhancements now run through a single sound processor.
+
 ## 0.4.0
 - The update screen is now a full page that lists what's new in every version since yours.
 - Music pauses while the update screen is open, and carries on if you choose Later.
