@@ -11,18 +11,23 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
 
+/** One version's changelog, as written in CHANGELOG.md and published with the release. */
+data class ReleaseNotes(val version: String, val notes: String)
+
 /** A newer release published on GitHub. */
 data class UpdateInfo(
     val version: String,
-    val notes: String,
     val apkUrl: String,
     val apkSize: Long,
+    /** Changes in every version newer than the installed one, newest first. */
+    val changes: List<ReleaseNotes>,
 )
 
 sealed interface UpdateState {
@@ -33,12 +38,14 @@ sealed interface UpdateState {
     data class Downloading(val info: UpdateInfo, val percent: Int) : UpdateState
     /** The APK is handed to Android; the system installer asks the user to confirm. */
     data object Installing : UpdateState
-    data class Failed(val message: String) : UpdateState
+    /** [info] is set when a download or install of that release failed (not a failed check). */
+    data class Failed(val message: String, val info: UpdateInfo? = null) : UpdateState
 }
 
 /**
  * Self-update from GitHub Releases: the release workflow attaches a signed APK to each
- * `vX.Y.Z` tag, and this checks the latest one and installs it through [PackageInstaller].
+ * `vX.Y.Z` tag, and this finds the newest one, gathers the changelog of every version since the
+ * installed one, and installs it through [PackageInstaller].
  */
 class AppUpdater(
     private val context: Context,
@@ -72,38 +79,40 @@ class AppUpdater(
         if (current is UpdateState.Checking || current is UpdateState.Downloading || current is UpdateState.Installing) return
         _state.value = UpdateState.Checking
         _state.value = try {
-            val release = withContext(Dispatchers.IO) {
+            val releases = withContext(Dispatchers.IO) {
                 val request = Request.Builder()
-                    .url("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
+                    .url("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases?per_page=30")
                     .header("Accept", "application/vnd.github+json")
                     .build()
                 http.newCall(request).execute().use { response ->
-                    if (response.code == 404) return@withContext null // no releases yet
                     if (!response.isSuccessful) throw IOException("GitHub returned ${response.code}")
-                    json.decodeFromString(Release.serializer(), response.body.string())
+                    json.decodeFromString(ListSerializer(Release.serializer()), response.body.string())
                 }
             }
-            val apk = release?.assets?.firstOrNull { it.name.endsWith(".apk") }
-            val version = release?.tag?.removePrefix("v")
-            if (release == null || apk == null || version == null || release.draft || release.prerelease ||
-                !Versions.isNewer(version, BuildConfig.VERSION_NAME)
-            ) {
-                UpdateState.UpToDate
-            } else {
-                UpdateState.Available(UpdateInfo(version, release.body.orEmpty().trim(), apk.url, apk.size))
-            }
+            val newer = releases
+                .filter { !it.draft && !it.prerelease }
+                .map { it.tag.removePrefix("v") to it }
+                .filter { (version, _) -> Versions.isNewer(version, BuildConfig.VERSION_NAME) }
+                .sortedWith { a, b -> if (Versions.isNewer(a.first, b.first)) -1 else if (Versions.isNewer(b.first, a.first)) 1 else 0 }
+            val (version, latest) = newer.firstOrNull { (_, r) -> r.assets.any { it.name.endsWith(".apk") } }
+                ?: return run { _state.value = UpdateState.UpToDate }
+            val apk = latest.assets.first { it.name.endsWith(".apk") }
+            val changes = newer
+                .filter { (v, _) -> !Versions.isNewer(v, version) }
+                .map { (v, r) -> ReleaseNotes(v, r.body.orEmpty().trim()) }
+            UpdateState.Available(UpdateInfo(version, apk.url, apk.size, changes))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             UpdateState.Failed("Couldn't check for updates. Check your connection.")
         }
     }
 
-    fun dismiss() {
-        if (_state.value !is UpdateState.Downloading) _state.value = UpdateState.Idle
-    }
+    /** The release being downloaded or installed, so a failed install can offer a retry. */
+    @Volatile private var pending: UpdateInfo? = null
 
     /** Streams the APK straight into an install session, then asks Android to install it. */
     suspend fun downloadAndInstall(info: UpdateInfo) {
+        pending = info
         _state.value = UpdateState.Downloading(info, 0)
         val installer = context.packageManager.packageInstaller
         var sessionId = -1
@@ -151,12 +160,12 @@ class AppUpdater(
         } catch (e: Exception) {
             if (sessionId >= 0) runCatching { installer.abandonSession(sessionId) }
             if (e is kotlinx.coroutines.CancellationException) throw e
-            _state.value = UpdateState.Failed("The update couldn't be downloaded. Please try again.")
+            _state.value = UpdateState.Failed("The update couldn't be downloaded. Please try again.", info)
         }
     }
 
     internal fun onInstallFailed(message: String) {
-        _state.value = UpdateState.Failed(message)
+        _state.value = UpdateState.Failed(message, pending)
     }
 }
 

@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -32,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +53,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.scrollcast.radio.data.AudioPrefs
 import com.scrollcast.radio.data.CatalogEntry
 import com.scrollcast.radio.data.Mix
 import com.scrollcast.radio.data.RegionDetector
@@ -60,8 +64,23 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
     val draft by vm.draft.collectAsStateWithLifecycle()
     val detectedLanguage by vm.detectedLanguage.collectAsStateWithLifecycle()
     var picking by rememberSaveable { mutableStateOf<OptionKind?>(null) }
+    var pickingEqualizer by rememberSaveable { mutableStateOf(false) }
+    val audio by vm.audio.collectAsStateWithLifecycle()
+    val audioCaps by vm.audioCapabilities.collectAsStateWithLifecycle()
 
     BackHandler(onBack = onClose)
+
+    if (pickingEqualizer) {
+        ListPicker(
+            title = "Choose equalizer",
+            options = listOf(AudioPrefs.EQ_OFF to "Off", AudioPrefs.EQ_VOICE to "Voice clarity") +
+                audioCaps.presets.map { it to it },
+            selected = audio.equalizer,
+            onPick = { vm.setEqualizer(it); pickingEqualizer = false },
+            onClose = { pickingEqualizer = false },
+        )
+        return
+    }
 
     picking?.let { kind ->
         OptionPicker(
@@ -111,7 +130,7 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
         ) {
             Text(
-                "Changes apply when you leave this screen.",
+                "Feed changes apply when you leave this screen. Audio changes apply right away.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -157,9 +176,82 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
                 onClick = { picking = OptionKind.Genre },
             )
 
+            if (audioCaps.evenLoudness || audioCaps.bassBoost || audioCaps.equalizer) {
+                SectionHeading("Audio")
+                if (audioCaps.evenLoudness) {
+                    SwitchRow(
+                        title = "Even out loudness",
+                        description = "Keeps every station at a similar volume.",
+                        checked = audio.evenLoudness,
+                        onChange = vm::setEvenLoudness,
+                    )
+                }
+                if (audioCaps.bassBoost) {
+                    SwitchRow(
+                        title = "Bass boost",
+                        description = "Fuller low end, best with headphones.",
+                        checked = audio.bassBoost,
+                        onChange = vm::setBassBoost,
+                    )
+                }
+                if (audioCaps.equalizer) {
+                    Spacer(Modifier.height(8.dp))
+                    ChoiceButton(
+                        label = "Equalizer",
+                        value = when (audio.equalizer) {
+                            AudioPrefs.EQ_OFF -> "Off"
+                            AudioPrefs.EQ_VOICE -> "Voice clarity"
+                            else -> audio.equalizer
+                        },
+                        onClick = { pickingEqualizer = true },
+                    )
+                }
+            }
+
             SectionHeading("App")
             UpdateSection(vm)
             Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+/** An on/off setting: the whole row is one switch for TalkBack. */
+@Composable
+private fun SwitchRow(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp))
+    }
+}
+
+/** Full-screen single-choice list for fixed options. */
+@Composable
+private fun ListPicker(
+    title: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onPick: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    BackHandler(onBack = onClose)
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().semantics { paneTitle = title }) {
+        ScreenHeader(title = title, onBack = onClose)
+        LazyColumn(Modifier.fillMaxSize().selectableGroup()) {
+            items(options.size) { i ->
+                val (key, label) = options[i]
+                OptionRow(title = label, subtitle = null, selected = key == selected, onClick = { onPick(key) })
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            }
         }
     }
 }

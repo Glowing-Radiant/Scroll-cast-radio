@@ -14,4 +14,7 @@ class QueueState {
 
     @Volatile var parkedFeed: List<String> = emptyList()
     @Volatile var parkedIndex: Int = 0
+
+    /** True while something (the update screen) needs silence: nothing may start playing. */
+    val hold = MutableStateFlow(false)
 }

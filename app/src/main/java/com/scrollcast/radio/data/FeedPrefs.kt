@@ -50,6 +50,21 @@ data class ResolvedPrefs(
     val moodKeyword: String? = null,
 )
 
+/** Optional sound processing, all off by default. */
+data class AudioPrefs(
+    /** Levels quiet and loud stations to a similar volume. */
+    val evenLoudness: Boolean = false,
+    val bassBoost: Boolean = false,
+    /** [EQ_OFF], [EQ_VOICE], or a device preset name. */
+    val equalizer: String = EQ_OFF,
+) {
+    companion object {
+        const val EQ_OFF = "off"
+        /** Built-in preset that lifts speech frequencies, for talk and news radio. */
+        const val EQ_VOICE = "voice"
+    }
+}
+
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
@@ -64,6 +79,24 @@ class SettingsStore(context: Context) {
         )
     )
     val feed: StateFlow<FeedPrefs> = _feed.asStateFlow()
+
+    private val _audio = MutableStateFlow(
+        AudioPrefs(
+            evenLoudness = prefs.getBoolean(KEY_EVEN_LOUDNESS, false),
+            bassBoost = prefs.getBoolean(KEY_BASS_BOOST, false),
+            equalizer = prefs.optional(KEY_EQUALIZER) ?: AudioPrefs.EQ_OFF,
+        )
+    )
+    val audio: StateFlow<AudioPrefs> = _audio.asStateFlow()
+
+    fun setAudio(value: AudioPrefs) {
+        prefs.edit()
+            .putBoolean(KEY_EVEN_LOUDNESS, value.evenLoudness)
+            .putBoolean(KEY_BASS_BOOST, value.bassBoost)
+            .putString(KEY_EQUALIZER, value.equalizer)
+            .apply()
+        _audio.value = value
+    }
 
     fun setFeed(value: FeedPrefs) {
         prefs.edit()
@@ -90,5 +123,8 @@ class SettingsStore(context: Context) {
         const val KEY_LANGUAGE_MIX = "language_mix"
         const val KEY_GENRE = "genre"
         const val KEY_MOOD = "mood"
+        const val KEY_EVEN_LOUDNESS = "audio_even_loudness"
+        const val KEY_BASS_BOOST = "audio_bass_boost"
+        const val KEY_EQUALIZER = "audio_equalizer"
     }
 }

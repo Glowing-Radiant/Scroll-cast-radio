@@ -1,6 +1,7 @@
 package com.scrollcast.radio.playback
 
 import android.app.PendingIntent
+import android.media.AudioManager
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -57,6 +58,11 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.addListener(PlayerEvents(player))
 
+        // A fixed audio session lets the optional enhancements (Settings → Audio) attach to it.
+        val audioSession = getSystemService(AudioManager::class.java).generateAudioSessionId()
+        player.audioSessionId = audioSession
+        graph.audioEffects.attach(audioSession)
+
         val openApp = packageManager.getLaunchIntentForPackage(packageName)?.let {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
@@ -74,6 +80,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         scope.cancel()
+        graph.audioEffects.release()
         session?.run {
             player.release()
             release()
@@ -101,7 +108,7 @@ class PlaybackService : MediaSessionService() {
             player.addMediaItems(batch.map { it.toMediaItem() })
             if (wasEmpty) {
                 player.prepare()
-                player.play()
+                if (!graph.queue.hold.value) player.play()
             }
         }
     }

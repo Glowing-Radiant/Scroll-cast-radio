@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.scrollcast.radio.data.ShareLinks
 import com.scrollcast.radio.ui.AnnouncementRegion
 import com.scrollcast.radio.ui.FavoritesScreen
@@ -38,7 +39,7 @@ import com.scrollcast.radio.ui.FeedScreen
 import com.scrollcast.radio.ui.FeedViewModel
 import com.scrollcast.radio.ui.ScrollCastTheme
 import com.scrollcast.radio.ui.SettingsScreen
-import com.scrollcast.radio.ui.UpdateDialog
+import com.scrollcast.radio.ui.UpdateScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Feed("Feed", Icons.Filled.PlayArrow),
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity() {
             ScrollCastTheme {
                 var tab by rememberSaveable { mutableStateOf(Tab.Feed) }
                 var settingsOpen by rememberSaveable { mutableStateOf(false) }
+                val updateVisible by vm.updateScreenVisible.collectAsStateWithLifecycle()
 
                 // Each tab is its own feed: switching tabs switches what the player plays through.
                 LaunchedEffect(tab) {
@@ -69,7 +71,11 @@ class MainActivity : ComponentActivity() {
                   // A plain Box: Surface stretches its direct children to full screen, which would
                   // turn the 1dp announcer into an invisible layer covering every control.
                   Box(Modifier.fillMaxSize()) {
-                    if (settingsOpen) {
+                    if (updateVisible) {
+                        // Replaces the app rather than covering it, so TalkBack can't wander
+                        // into the feed underneath.
+                        UpdateScreen(vm)
+                    } else if (settingsOpen) {
                         SettingsScreen(vm, onClose = {
                             vm.commitSettings()
                             settingsOpen = false
@@ -110,7 +116,6 @@ class MainActivity : ComponentActivity() {
                     }
                     // Announcements keep working on every screen, not just the feed.
                     AnnouncementRegion(vm, Modifier.align(Alignment.BottomStart))
-                    UpdateDialog(vm)
                   }
                 }
             }

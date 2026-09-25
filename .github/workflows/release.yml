@@ -51,9 +51,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The app's update screen shows these notes, so they come from CHANGELOG.md.
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## " { if (found) exit; found = ($2 == v) ; next }
+            found' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## $VERSION' section"; exit 1
+          fi
+          cat notes.md
           gh release create "$GITHUB_REF_NAME" "$APK" \
             --title "Scroll Cast Radio $GITHUB_REF_NAME" \
-            --generate-notes
+            --notes-file notes.md
 
       - name: Remove signing key
         if: always()

@@ -20,6 +20,8 @@ station, like reels. It's minimal by design and fully usable with TalkBack.
     browser when the app isn't installed. `scrollcast://station/<uuid>` also works.
   - *Stream link*: the station's direct stream URL.
 - **Dead streams** are dropped and skipped automatically.
+- **Audio** (optional, in Settings): even out loudness between stations, bass boost, and an
+  equalizer with a Voice clarity preset plus the phone's own presets.
 
 ## Accessibility
 - One-finger swipe up/down changes station. Each station fills the whole screen, so TalkBack
@@ -55,8 +57,13 @@ current mood is shown under it.
   ```
   It tests the app, builds an APK signed with the release key, and publishes it as a GitHub
   Release. The version comes from the tag (`versionCode` = major·10000 + minor·100 + patch).
-- **In-app updates**: release builds check the latest GitHub Release on launch and in
-  Settings → App → Check for updates. They download the APK and hand it to Android's installer.
+- **In-app updates**: release builds check GitHub Releases on launch and in
+  Settings → App → Check for updates. A full-screen update page lists what's new in every
+  version since the installed one (playback pauses while it's open), then downloads the APK and
+  hands it to Android's installer.
+- **Changelog**: every release needs a `## X.Y.Z` section in `CHANGELOG.md`, written for
+  listeners. The release workflow publishes that section as the release notes (and fails without
+  it), and the app shows it on the update page.
 - **Signing**: the key lives outside the repo (`~/.scrollcast-signing/`) and in the repo's
   Actions secrets `SIGNING_KEYSTORE_BASE64`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS` and
   `SIGNING_KEY_PASSWORD`. Every release must use the same key, or updates won't install.

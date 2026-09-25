@@ -11,11 +11,13 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.scrollcast.radio.BuildConfig
 import com.scrollcast.radio.appGraph
+import com.scrollcast.radio.data.AudioPrefs
 import com.scrollcast.radio.data.CatalogEntry
 import com.scrollcast.radio.data.FeedPrefs
 import com.scrollcast.radio.data.ShareLinks
 import com.scrollcast.radio.data.Station
 import androidx.media3.common.C
+import com.scrollcast.radio.playback.AudioCapabilities
 import com.scrollcast.radio.playback.PlaybackService
 import com.scrollcast.radio.playback.QueueMode
 import com.scrollcast.radio.playback.queue
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -83,13 +86,28 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         .map { it.mood }
         .stateIn(viewModelScope, SharingStarted.Eagerly, graph.settings.feed.value.mood)
 
+    /** Optional sound processing; applies immediately, not when Settings closes. */
+    val audio: StateFlow<AudioPrefs> = graph.settings.audio
+    val audioCapabilities: StateFlow<AudioCapabilities> = graph.audioEffects.capabilities
+
     val update: StateFlow<UpdateState> = graph.updater.state
     val updatesEnabled: Boolean = graph.updater.isEnabled
     val versionName: String = BuildConfig.VERSION_NAME
 
-    /** The update prompt was closed with "Later"; don't reopen it this session. */
-    private val _updatePromptDismissed = MutableStateFlow(false)
-    val updatePromptDismissed: StateFlow<Boolean> = _updatePromptDismissed.asStateFlow()
+    /** The update screen was closed with "Later"; don't reopen it this session. */
+    private val updateDismissed = MutableStateFlow(false)
+
+    /** The full-screen updater is showing. Playback is held silent while it is. */
+    val updateScreenVisible: StateFlow<Boolean> = combine(graph.updater.state, updateDismissed) { state, dismissed ->
+        !dismissed && when (state) {
+            is UpdateState.Available, is UpdateState.Downloading, UpdateState.Installing -> true
+            is UpdateState.Failed -> state.info != null
+            else -> false
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Playback was running (or about to start) when the update screen silenced it. */
+    private var resumeAfterHold = false
 
     /** Which feed the player holds; the Favorites tab switches it. */
     val queueMode: StateFlow<QueueMode> = graph.queue.mode
@@ -120,6 +138,10 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
             pendingActions.clear()
         }, ContextCompat.getMainExecutor(app))
 
+        viewModelScope.launch {
+            updateScreenVisible.collect { visible -> setHold(visible) }
+        }
+
         if (updatesEnabled) viewModelScope.launch {
             graph.updater.check()
             (graph.updater.state.value as? UpdateState.Available)?.let {
@@ -141,6 +163,10 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun sync(p: Player) {
+        if (graph.queue.hold.value && p.playWhenReady) {
+            resumeAfterHold = true
+            p.pause()
+        }
         val stations = (0 until p.mediaItemCount).map { i ->
             val item = p.getMediaItemAt(i)
             graph.feed.cached(item.stationId) ?: item.toFallbackStation()
@@ -160,6 +186,22 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
             announcedId = current.uuid
             announce(announcePrefix + current.spokenSummary)
             announcePrefix = ""
+        }
+    }
+
+    /** Silences playback while [hold] is set, and resumes it afterwards if it was playing. */
+    private fun setHold(hold: Boolean) {
+        if (graph.queue.hold.value == hold) return
+        graph.queue.hold.value = hold
+        withController { c ->
+            if (hold) {
+                // A fresh start (empty feed) would auto-play once loaded, so resume that too.
+                resumeAfterHold = resumeAfterHold || c.playWhenReady || c.mediaItemCount == 0
+                c.pause()
+            } else if (resumeAfterHold) {
+                resumeAfterHold = false
+                if (c.mediaItemCount > 0) c.resume()
+            }
         }
     }
 
@@ -310,6 +352,22 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         announce("Settings saved. Loading a new feed.")
     }
 
+    // --- Audio --------------------------------------------------------------------------------
+
+    fun setEvenLoudness(on: Boolean) {
+        graph.settings.setAudio(graph.settings.audio.value.copy(evenLoudness = on))
+        announce(if (on) "Even out loudness on." else "Even out loudness off.")
+    }
+
+    fun setBassBoost(on: Boolean) {
+        graph.settings.setAudio(graph.settings.audio.value.copy(bassBoost = on))
+        announce(if (on) "Bass boost on." else "Bass boost off.")
+    }
+
+    fun setEqualizer(value: String) {
+        graph.settings.setAudio(graph.settings.audio.value.copy(equalizer = value))
+    }
+
     // --- Mood ---------------------------------------------------------------------------------
 
     /** Rebuilds the feed around a typed mood; blank or null clears it. */
@@ -329,7 +387,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     // --- Updates ------------------------------------------------------------------------------
 
     fun checkForUpdates() {
-        _updatePromptDismissed.value = false
+        updateDismissed.value = false
         viewModelScope.launch {
             graph.updater.check()
             when (val s = graph.updater.state.value) {
@@ -342,6 +400,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun installUpdate(info: UpdateInfo) {
+        updateDismissed.value = false
         announce("Downloading the update.")
         viewModelScope.launch {
             graph.updater.downloadAndInstall(info)
@@ -350,7 +409,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun dismissUpdate() {
-        _updatePromptDismissed.value = true
+        updateDismissed.value = true
     }
 
     fun loadOptions(kind: OptionKind) {
