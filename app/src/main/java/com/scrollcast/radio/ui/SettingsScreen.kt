@@ -156,6 +156,9 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
                 value = draft.genre?.capitalized() ?: "Any genre",
                 onClick = { picking = OptionKind.Genre },
             )
+
+            SectionHeading("App")
+            UpdateSection(vm)
             Spacer(Modifier.height(32.dp))
         }
     }

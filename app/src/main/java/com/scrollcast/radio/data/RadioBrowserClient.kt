@@ -48,8 +48,9 @@ class RadioBrowserClient(
         }
         query.tag?.let {
             addQueryParameter("tag", it)
-            addQueryParameter("tagExact", "true")
+            addQueryParameter("tagExact", query.tagExact.toString())
         }
+        query.name?.let { addQueryParameter("name", it) }
     }
 
     suspend fun countries(): List<CatalogEntry> =

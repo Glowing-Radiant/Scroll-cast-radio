@@ -12,6 +12,16 @@ val shareBaseUrl = providers.gradleProperty("scrollcast.shareBaseUrl")
     .trimEnd('/')
 val shareUri = URI(shareBaseUrl)
 
+// Releases set this from the git tag (v1.2.3 → 1.2.3); versionCode is derived from it.
+val appVersionName = providers.gradleProperty("appVersionName").getOrElse("0.2.0")
+val appVersionCode = appVersionName.substringBefore('-').split('.')
+    .map { it.toIntOrNull() ?: 0 }
+    .let { (it + listOf(0, 0, 0)).take(3) }
+    .let { (major, minor, patch) -> major * 10_000 + minor * 100 + patch }
+
+// Release signing comes from environment variables (GitHub Actions secrets).
+val releaseStoreFile: String? = System.getenv("SIGNING_STORE_FILE")
+
 android {
     namespace = "com.scrollcast.radio"
     compileSdk = 36
@@ -19,18 +29,39 @@ android {
         applicationId = "com.scrollcast.radio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         buildConfigField("String", "SHARE_BASE_URL", "\"$shareBaseUrl\"")
+        buildConfigField(
+            "String", "UPDATE_REPO",
+            "\"${providers.gradleProperty("scrollcast.updateRepo").getOrElse("Glowing-Radiant/Scroll-cast-radio")}\"",
+        )
         manifestPlaceholders["shareHost"] = shareUri.host
         manifestPlaceholders["sharePathPrefix"] = "${shareUri.path}/s"
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // Installs beside the release app, so GitHub updates never clash with dev builds.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {

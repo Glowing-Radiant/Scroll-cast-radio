@@ -18,6 +18,8 @@ import com.scrollcast.radio.data.Station
 import com.scrollcast.radio.playback.PlaybackService
 import com.scrollcast.radio.playback.toFallbackStation
 import com.scrollcast.radio.playback.toMediaItem
+import com.scrollcast.radio.update.UpdateInfo
+import com.scrollcast.radio.update.UpdateState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +72,19 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     private val _options = MutableStateFlow<Map<OptionKind, OptionsState>>(emptyMap())
     val options: StateFlow<Map<OptionKind, OptionsState>> = _options.asStateFlow()
 
+    /** The typed mood currently shaping the feed, if any. */
+    val mood: StateFlow<String?> = graph.settings.feed
+        .map { it.mood }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, graph.settings.feed.value.mood)
+
+    val update: StateFlow<UpdateState> = graph.updater.state
+    val updatesEnabled: Boolean = graph.updater.isEnabled
+    val versionName: String = BuildConfig.VERSION_NAME
+
+    /** The update prompt was closed with "Later"; don't reopen it this session. */
+    private val _updatePromptDismissed = MutableStateFlow(false)
+    val updatePromptDismissed: StateFlow<Boolean> = _updatePromptDismissed.asStateFlow()
+
     private var announcedId: String? = null
     private var skippedDeadStation = false
 
@@ -94,6 +109,13 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
             pendingActions.forEach { it(c) }
             pendingActions.clear()
         }, ContextCompat.getMainExecutor(app))
+
+        if (updatesEnabled) viewModelScope.launch {
+            graph.updater.check()
+            (graph.updater.state.value as? UpdateState.Available)?.let {
+                announce("An update to version ${it.info.version} is available.")
+            }
+        }
     }
 
     override fun onCleared() {
@@ -229,6 +251,49 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         announcedId = null
         graph.settings.setFeed(next)
         announce("Settings saved. Loading a new feed.")
+    }
+
+    // --- Mood ---------------------------------------------------------------------------------
+
+    /** Rebuilds the feed around a typed mood; blank or null clears it. */
+    fun setMood(text: String?) {
+        val mood = text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() }
+        val current = graph.settings.feed.value
+        if (mood == current.mood) {
+            graph.feed.requestMore()
+            return
+        }
+        announcedId = null
+        graph.settings.setFeed(current.copy(mood = mood))
+        _draft.value = _draft.value.copy(mood = mood)
+        announce(if (mood == null) "Mood cleared. Back to your usual feed." else "Finding stations for $mood.")
+    }
+
+    // --- Updates ------------------------------------------------------------------------------
+
+    fun checkForUpdates() {
+        _updatePromptDismissed.value = false
+        viewModelScope.launch {
+            graph.updater.check()
+            when (val s = graph.updater.state.value) {
+                is UpdateState.Available -> announce("Version ${s.info.version} is available.")
+                UpdateState.UpToDate -> announce("You have the latest version.")
+                is UpdateState.Failed -> announce(s.message)
+                else -> Unit
+            }
+        }
+    }
+
+    fun installUpdate(info: UpdateInfo) {
+        announce("Downloading the update.")
+        viewModelScope.launch {
+            graph.updater.downloadAndInstall(info)
+            (graph.updater.state.value as? UpdateState.Failed)?.let { announce(it.message) }
+        }
+    }
+
+    fun dismissUpdate() {
+        _updatePromptDismissed.value = true
     }
 
     fun loadOptions(kind: OptionKind) {

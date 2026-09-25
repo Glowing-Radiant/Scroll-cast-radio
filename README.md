@@ -39,8 +39,31 @@ App links point at `scrollcast.shareBaseUrl` in `gradle.properties`
 (https://glowing-radiant.github.io/Scroll-cast-radio). That site is the `docs/` folder, published
 with GitHub Pages from branch `main`, folder `/docs`.
 
+## Mood
+"Tell us your mood" at the top of the feed takes any keyword, e.g. `hindi`, `romantic`,
+`hip hop` or `romantic hindi`. Words that name a language or country become strict filters; the
+rest matches genres loosely. If nothing matches, the app searches station names worldwide.
+Clearing the mood returns the feed to your Settings.
+
+## Releases and updates
+- **CI** (`.github/workflows/ci.yml`) runs the unit tests and builds a debug APK on every push.
+- **Release** (`.github/workflows/release.yml`) runs when you push a version tag:
+  ```bash
+  git tag v0.3.0 && git push origin v0.3.0
+  ```
+  It tests the app, builds an APK signed with the release key, and publishes it as a GitHub
+  Release. The version comes from the tag (`versionCode` = major·10000 + minor·100 + patch).
+- **In-app updates**: release builds check the latest GitHub Release on launch and in
+  Settings → App → Check for updates. They download the APK and hand it to Android's installer.
+- **Signing**: the key lives outside the repo (`~/.scrollcast-signing/`) and in the repo's
+  Actions secrets `SIGNING_KEYSTORE_BASE64`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS` and
+  `SIGNING_KEY_PASSWORD`. Every release must use the same key, or updates won't install.
+- Debug builds install separately as `com.scrollcast.radio.debug` ("Scroll Cast Radio (dev)"),
+  so they never conflict with the released app.
+
 ## Layout
 - `data/`: Radio Browser client (mirror failover), feed builder, favorites, filters, share links
 - `playback/PlaybackService.kt`: Media3 session and ExoPlayer; keeps the feed topped up
-- `ui/`: Compose screens (feed, favorites, filters) and `FeedViewModel`
+- `ui/`: Compose screens (feed, favorites, settings, update dialog) and `FeedViewModel`
+- `update/`: GitHub Releases update check and installer
 - `docs/`: GitHub Pages site with the "open in app" redirect page

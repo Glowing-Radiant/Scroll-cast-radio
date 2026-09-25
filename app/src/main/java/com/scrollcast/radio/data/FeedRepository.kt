@@ -60,15 +60,32 @@ class FeedRepository(
 
     suspend fun countClick(uuid: String) = api.countClick(uuid)
 
-    /** Turns "automatic" settings into the detected country and the device language. */
-    suspend fun resolve(prefs: FeedPrefs): ResolvedPrefs = ResolvedPrefs(
-        countryCode = prefs.countryCode ?: region.countryCode(),
-        regionMix = prefs.regionMix,
-        language = prefs.language
-            ?: if (prefs.languageMix == Mix.Mixed) null else catalog.languageForIso(region.languageCode()),
-        languageMix = prefs.languageMix,
-        genre = prefs.genre,
-    )
+    /**
+     * Turns "automatic" settings into the detected country and the device language, then lets
+     * a typed mood override whatever it names: "hindi" means only Hindi, "brazil" only
+     * Brazil, and other words replace the genre with a loose tag match.
+     */
+    suspend fun resolve(prefs: FeedPrefs): ResolvedPrefs {
+        val base = ResolvedPrefs(
+            countryCode = prefs.countryCode ?: region.countryCode(),
+            regionMix = prefs.regionMix,
+            language = prefs.language
+                ?: if (prefs.languageMix == Mix.Mixed) null else catalog.languageForIso(region.languageCode()),
+            languageMix = prefs.languageMix,
+            genre = prefs.genre,
+        )
+        val keyword = prefs.mood?.trim()?.takeIf { it.isNotEmpty() } ?: return base
+        val mood = catalog.parseMood(keyword)
+        return base.copy(
+            countryCode = mood.countryCode ?: base.countryCode,
+            regionMix = if (mood.countryCode != null) Mix.Only else base.regionMix,
+            language = mood.language ?: base.language,
+            languageMix = if (mood.language != null) Mix.Only else base.languageMix,
+            genre = mood.tag,
+            genreExact = false,
+            moodKeyword = keyword,
+        )
+    }
 
     /** Returns the next stations for the feed, or an empty list (with [error] set) on failure. */
     suspend fun nextBatch(): List<Station> {
@@ -76,13 +93,19 @@ class FeedRepository(
         try {
             val prefs = resolve(settings.feed.value)
             var batch = fetchBatch(prefs)
+            if (batch.isEmpty() && prefs.moodKeyword != null) batch = moodFallback(prefs.moodKeyword)
             if (batch.isEmpty() && served.isNotEmpty()) {
                 // A narrow feed (say, one small country only) has been played through: start over.
                 served.clear()
                 batch = fetchBatch(prefs)
+                if (batch.isEmpty() && prefs.moodKeyword != null) batch = moodFallback(prefs.moodKeyword)
             }
             batch.forEach { remember(it); served += it.uuid }
-            _error.value = if (batch.isNotEmpty()) null else "No stations match your settings. Try a wider mix in Settings."
+            _error.value = when {
+                batch.isNotEmpty() -> null
+                prefs.moodKeyword != null -> "No stations found for “${prefs.moodKeyword}”. Try another mood."
+                else -> "No stations match your settings. Try a wider mix in Settings."
+            }
             return batch
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -106,6 +129,18 @@ class FeedRepository(
             results.filterNotNull().flatten() + popular.await()
         }
         return pickBatch(candidates, served, BATCH_SIZE)
+    }
+
+    /** Last resort for a mood: the keyword as a tag or in station names, anywhere in the world. */
+    private suspend fun moodFallback(keyword: String): List<Station> = coroutineScope {
+        val queries = listOf(
+            StationQuery(tag = keyword, tagExact = false),
+            StationQuery(name = keyword),
+        )
+        val found = queries.map { q ->
+            async { runCatching { api.search(q, order = "random", limit = RANDOM_SAMPLE) }.getOrDefault(emptyList()) }
+        }.awaitAll().flatten()
+        pickBatch(found, served, BATCH_SIZE)
     }
 
     private suspend fun popularSlice(query: StationQuery): List<Station> {
@@ -137,6 +172,7 @@ class FeedRepository(
                     countryCode = prefs.countryCode.takeIf { useRegion },
                     language = prefs.language.takeIf { useLanguage },
                     tag = prefs.genre,
+                    tagExact = prefs.genreExact,
                 )
                 plan += query to p
             }

@@ -11,6 +11,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
@@ -68,12 +76,19 @@ fun FeedScreen(
     val favoriteIds by vm.favoriteIds.collectAsStateWithLifecycle()
     val loading by vm.feedLoading.collectAsStateWithLifecycle()
     val error by vm.feedError.collectAsStateWithLifecycle()
+    val mood by vm.mood.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var shareTarget by remember { mutableStateOf<Station?>(null) }
+    var moodDialogOpen by rememberSaveable { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().semantics { paneTitle = "Station feed" }) {
         if (state.stations.isEmpty()) {
-            EmptyFeed(loading = loading, error = error, onRetry = vm::retry)
+            EmptyFeed(
+                loading = loading,
+                error = error,
+                onRetry = vm::retry,
+                onClearMood = if (mood != null) ({ vm.setMood(null) }) else null,
+            )
         } else {
             val pagerState = rememberPagerState(initialPage = state.currentIndex) { state.stations.size }
 
@@ -117,12 +132,33 @@ fun FeedScreen(
             }
         }
 
-        IconButton(
-            onClick = onOpenSettings,
-            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp).size(56.dp),
+        Row(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding()
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.Settings, contentDescription = "Settings")
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { moodDialogOpen = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(
+                        mood?.let { "Mood: $it" } ?: "Tell us your mood",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onOpenSettings, modifier = Modifier.size(56.dp)) {
+                Icon(Icons.Filled.Settings, contentDescription = "Settings")
+            }
         }
+    }
+
+    if (moodDialogOpen) {
+        MoodDialog(
+            current = mood,
+            onPlay = { moodDialogOpen = false; vm.setMood(it) },
+            onClear = { moodDialogOpen = false; vm.setMood(null) },
+            onDismiss = { moodDialogOpen = false },
+        )
     }
 
     shareTarget?.let { station ->
@@ -235,8 +271,50 @@ private fun StationPage(
     }
 }
 
+/** Free-text mood: a language, a country, a genre or any mix, e.g. "romantic hindi". */
 @Composable
-private fun EmptyFeed(loading: Boolean, error: String?, onRetry: () -> Unit) {
+private fun MoodDialog(
+    current: String?,
+    onPlay: (String) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf(current.orEmpty()) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    val submit = { if (text.isNotBlank()) onPlay(text) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tell us your mood") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Mood") },
+                    supportingText = { Text("For example: hindi, romantic, hip hop") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { submit() }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+                if (current != null) {
+                    OutlinedButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
+                        Text("Clear mood")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = submit, enabled = text.isNotBlank()) { Text("Play") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun EmptyFeed(loading: Boolean, error: String?, onRetry: () -> Unit, onClearMood: (() -> Unit)?) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -251,6 +329,10 @@ private fun EmptyFeed(loading: Boolean, error: String?, onRetry: () -> Unit) {
             )
             Spacer(Modifier.height(24.dp))
             Button(onClick = onRetry) { Text("Try again") }
+            if (onClearMood != null) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onClearMood) { Text("Clear mood") }
+            }
         } else {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(24.dp))

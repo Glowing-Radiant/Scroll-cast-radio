@@ -33,15 +33,21 @@ data class FeedPrefs(
     val language: String? = null,
     val languageMix: Mix = Mix.Mixed,
     val genre: String? = null,
+    /** Free-text mood such as "romantic hindi"; while set it reshapes the whole feed. */
+    val mood: String? = null,
 )
 
-/** Settings with "automatic" resolved to concrete values. */
+/** Settings with "automatic" and the mood resolved to concrete query values. */
 data class ResolvedPrefs(
     val countryCode: String?,
     val regionMix: Mix,
     val language: String?,
     val languageMix: Mix,
     val genre: String?,
+    /** False when [genre] came from a typed mood and should match tags loosely. */
+    val genreExact: Boolean = true,
+    /** The typed mood, kept for a name-search fallback when nothing else matches. */
+    val moodKeyword: String? = null,
 )
 
 class SettingsStore(context: Context) {
@@ -54,6 +60,7 @@ class SettingsStore(context: Context) {
             language = prefs.optional(KEY_LANGUAGE),
             languageMix = prefs.getString(KEY_LANGUAGE_MIX, null).toMix(Mix.Mixed),
             genre = prefs.optional(KEY_GENRE),
+            mood = prefs.optional(KEY_MOOD),
         )
     )
     val feed: StateFlow<FeedPrefs> = _feed.asStateFlow()
@@ -65,6 +72,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_LANGUAGE, value.language)
             .putString(KEY_LANGUAGE_MIX, value.languageMix.name)
             .putString(KEY_GENRE, value.genre)
+            .putString(KEY_MOOD, value.mood)
             .apply()
         _feed.value = value
     }
@@ -81,5 +89,6 @@ class SettingsStore(context: Context) {
         const val KEY_LANGUAGE = "language"
         const val KEY_LANGUAGE_MIX = "language_mix"
         const val KEY_GENRE = "genre"
+        const val KEY_MOOD = "mood"
     }
 }

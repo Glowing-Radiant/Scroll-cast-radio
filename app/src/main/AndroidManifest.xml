@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- In-app updates from GitHub Releases. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".ScrollCastApp"
@@ -46,6 +48,10 @@
                     android:pathPrefix="${sharePathPrefix}" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".update.UpdateResultReceiver"
+            android:exported="false" />
 
         <service
             android:name=".playback.PlaybackService"

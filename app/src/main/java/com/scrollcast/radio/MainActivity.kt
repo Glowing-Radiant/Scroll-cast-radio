@@ -37,6 +37,7 @@ import com.scrollcast.radio.ui.FeedScreen
 import com.scrollcast.radio.ui.FeedViewModel
 import com.scrollcast.radio.ui.ScrollCastTheme
 import com.scrollcast.radio.ui.SettingsScreen
+import com.scrollcast.radio.ui.UpdateDialog
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Feed("Feed", Icons.Filled.PlayArrow),
@@ -103,6 +104,7 @@ class MainActivity : ComponentActivity() {
                     }
                     // Announcements keep working on every screen, not just the feed.
                     AnnouncementRegion(vm, Modifier.align(Alignment.BottomStart))
+                    UpdateDialog(vm)
                   }
                 }
             }
