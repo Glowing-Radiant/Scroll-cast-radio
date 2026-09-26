@@ -1,6 +1,7 @@
 package com.scrollcast.radio.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,35 +37,37 @@ fun FavoritesScreen(vm: FeedViewModel) {
     val favorites by vm.favorites.collectAsStateWithLifecycle()
     val state by vm.player.collectAsStateWithLifecycle()
 
-    Box(Modifier.fillMaxSize().semantics { paneTitle = "Favorites" }) {
-        when {
-            favorites.isEmpty() && state.queue != QueueMode.Favorites ->
-                Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        "No favorites yet. Tap the heart on a station in the feed to keep it here.",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            // Still loading the favorites into the player.
-            state.queue != QueueMode.Favorites || state.stations.isEmpty() ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
-            else -> StationPager(vm, state)
-        }
-
+    // Heading above the pager, not over it, so it comes first for every screen reader.
+    Column(Modifier.fillMaxSize().semantics { paneTitle = "Favorites" }) {
         Text(
             "Favorites",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             modifier = Modifier
-                .align(Alignment.TopStart)
                 .statusBarsPadding()
-                .padding(start = 24.dp, top = 20.dp)
+                .padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
                 .semantics { heading() },
         )
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                favorites.isEmpty() && state.queue != QueueMode.Favorites ->
+                    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "No favorites yet. Tap the heart on a station in the feed to keep it here.",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                // Still loading the favorites into the player.
+                state.queue != QueueMode.Favorites || state.stations.isEmpty() ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                else -> StationPager(vm, state)
+            }
+        }
     }
 }
 

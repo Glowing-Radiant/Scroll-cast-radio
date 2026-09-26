@@ -54,6 +54,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ScrollAxisRange
+import androidx.compose.ui.semantics.verticalScrollAxisRange
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
@@ -80,23 +82,11 @@ fun FeedScreen(
     val mood by vm.mood.collectAsStateWithLifecycle()
     var moodDialogOpen by rememberSaveable { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize().semantics { paneTitle = "Station feed" }) {
-        when {
-            // Still switching back from the favorites feed.
-            state.queue != QueueMode.Feed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-            }
-            state.stations.isEmpty() -> EmptyFeed(
-                loading = loading,
-                error = error,
-                onRetry = vm::retry,
-                onClearMood = if (mood != null) ({ vm.setMood(null) }) else null,
-            )
-            else -> StationPager(vm, state)
-        }
-
+    // The top bar sits above the pager, not over it, and comes first: screen readers that go by
+    // tree order (Jieshuo) otherwise never reach it and scroll the pager instead.
+    Column(Modifier.fillMaxSize().semantics { paneTitle = "Station feed" }) {
         Row(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding()
+            Modifier.fillMaxWidth().statusBarsPadding()
                 .padding(start = 16.dp, end = 8.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -111,6 +101,22 @@ fun FeedScreen(
             }
             IconButton(onClick = onOpenSettings, modifier = Modifier.size(56.dp)) {
                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
+            }
+        }
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                // Still switching back from the favorites feed.
+                state.queue != QueueMode.Feed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+                state.stations.isEmpty() -> EmptyFeed(
+                    loading = loading,
+                    error = error,
+                    onRetry = vm::retry,
+                    onClearMood = if (mood != null) ({ vm.setMood(null) }) else null,
+                )
+                else -> StationPager(vm, state)
             }
         }
     }
@@ -151,7 +157,13 @@ fun StationPager(vm: FeedViewModel, state: PlayerUiState) {
         // Position + id: a narrow feed that loops can hold the same station more than once.
         key = { page -> "$page:${state.stations.getOrNull(page)?.uuid}" },
         beyondViewportPageCount = 1,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().semantics {
+            // Hide the pager's scroll range from screen readers. Otherwise Jieshuo, on swiping
+            // past the last button of a page, scrolls to the next station instead of stopping.
+            // Stations still change by two-finger swipe (plain touch), the Next/Previous custom
+            // actions and headset keys. Outer modifier, so it overrides the pager's own value.
+            verticalScrollAxisRange = ScrollAxisRange(value = { 0f }, maxValue = { 0f })
+        },
     ) { page ->
         val station = state.stations[page]
         val isCurrent = page == state.currentIndex
@@ -204,9 +216,9 @@ private fun StationPage(
 ) {
     val colors = MaterialTheme.colorScheme
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 24.dp),
+        Modifier.fillMaxSize().navigationBarsPadding().padding(horizontal = 24.dp),
     ) {
-        Spacer(Modifier.height(72.dp))
+        Spacer(Modifier.height(8.dp))
 
         // The station itself: one TalkBack stop that reads the station, its state and offers
         // every action, so the feed is usable without hunting for buttons.

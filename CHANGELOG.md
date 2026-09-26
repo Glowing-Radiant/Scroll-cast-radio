@@ -2,6 +2,10 @@
 
 Each version's section is shown in the app's update screen, so write it for listeners.
 
+## 0.4.2
+- Better with the Jieshuo screen reader: the mood button can now be reached, and swiping past the last button no longer skips to another station by accident.
+- The mood and settings buttons now come first on the feed, and the Favorites heading first on the Favorites tab.
+
 ## 0.4.1
 - Fixed: sound cut out when Even out loudness and Bass boost were both on. All audio enhancements now run through a single sound processor.
 
