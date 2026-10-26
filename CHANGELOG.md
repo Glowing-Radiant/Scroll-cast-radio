@@ -2,6 +2,16 @@
 
 Each version's section is shown in the app's update screen, so write it for listeners.
 
+## 0.5.0
+- New station sources besides Radio Browser: SomaFM, Radio Paradise and laut.fm. Turn them on in Settings under "Stations from".
+- Turn on more than one source to mix their stations into one feed. Your region, language and genre choices still apply.
+- When the feed mixes sources, each station shows which one it's from.
+- Share links work for stations from every source.
+- Add your own sources: paste a link to an M3U, PLS or JSON station list, a single stream, or a GitHub repository and browse it for playlists. Your sources mix into the feed like the others.
+- Share your sources: each one has a Share button, and the link offers to add that station list on another phone. Stations from your sources can be shared too, and play even for people who don't have the list.
+- TV channels and other video streams play their sound only, using as little data as the stream allows.
+- Settings is now a short menu: Stations from, Feed, Audio and App each open a page of their own.
+
 ## 0.4.2
 - Better with the Jieshuo screen reader: the mood button can now be reached, and swiping past the last button no longer skips to another station by accident.
 - The mood and settings buttons now come first on the feed, and the Favorites heading first on the Favorites tab.

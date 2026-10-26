@@ -1,5 +1,8 @@
-package com.scrollcast.radio.data
+package com.scrollcast.radio.data.providers
 
+import com.scrollcast.radio.data.CatalogEntry
+import com.scrollcast.radio.data.Station
+import com.scrollcast.radio.data.StationQuery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName

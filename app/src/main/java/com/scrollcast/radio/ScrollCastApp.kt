@@ -5,9 +5,15 @@ import android.content.Context
 import com.scrollcast.radio.data.Catalog
 import com.scrollcast.radio.data.FavoritesStore
 import com.scrollcast.radio.data.FeedRepository
-import com.scrollcast.radio.data.RadioBrowserClient
 import com.scrollcast.radio.data.RegionDetector
 import com.scrollcast.radio.data.SettingsStore
+import com.scrollcast.radio.data.providers.LautFmProvider
+import com.scrollcast.radio.data.providers.Providers
+import com.scrollcast.radio.data.providers.RadioBrowserClient
+import com.scrollcast.radio.data.providers.RadioBrowserProvider
+import com.scrollcast.radio.data.providers.RadioParadiseProvider
+import com.scrollcast.radio.data.providers.SomaFmProvider
+import com.scrollcast.radio.data.providers.UserSources
 import com.scrollcast.radio.playback.AudioEffects
 import com.scrollcast.radio.playback.QueueState
 import com.scrollcast.radio.update.AppUpdater
@@ -41,11 +47,23 @@ class AppGraph(context: Context) {
         }
         .build()
 
-    private val api = RadioBrowserClient(http, json)
+    /** Playlists the user added by link; each is a provider of its own. */
+    val userSources = UserSources(context, http, json)
+
+    /** Station directories, in the order Settings lists them. The first is the default. */
+    val providers = Providers(
+        builtIn = listOf(
+            RadioBrowserProvider(RadioBrowserClient(http, json)),
+            SomaFmProvider(http, json),
+            RadioParadiseProvider(),
+            LautFmProvider(http, json),
+        ),
+        user = userSources::providers,
+    )
     val settings = SettingsStore(context)
     val region = RegionDetector(context)
-    val catalog = Catalog(api)
-    val feed = FeedRepository(api, catalog, settings, region)
+    val catalog = Catalog(providers)
+    val feed = FeedRepository(providers, catalog, settings, region)
     val favorites = FavoritesStore(context, json, scope)
     val updater = AppUpdater(context, http, json)
     val queue = QueueState()

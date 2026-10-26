@@ -39,6 +39,7 @@ import com.scrollcast.radio.ui.FeedScreen
 import com.scrollcast.radio.ui.FeedViewModel
 import com.scrollcast.radio.ui.ScrollCastTheme
 import com.scrollcast.radio.ui.SettingsScreen
+import com.scrollcast.radio.ui.SourceOfferDialog
 import com.scrollcast.radio.ui.UpdateScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
@@ -114,6 +115,10 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    val sourceOffer by vm.sourceOffer.collectAsStateWithLifecycle()
+                    sourceOffer?.let { offer ->
+                        SourceOfferDialog(offer, onAdd = vm::acceptSourceOffer, onDismiss = vm::declineSourceOffer)
+                    }
                     // Announcements keep working on every screen, not just the feed.
                     AnnouncementRegion(vm, Modifier.align(Alignment.BottomStart))
                   }
@@ -128,6 +133,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleLink(intent: Intent?) {
-        ShareLinks.stationIdFrom(intent?.dataString)?.let(vm::openSharedStation)
+        ShareLinks.parse(intent?.dataString)?.let(vm::openLink)
     }
 }

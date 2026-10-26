@@ -3,9 +3,13 @@ package com.scrollcast.radio.data
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/** A station as returned by the Radio Browser API (only the fields the app uses). */
+/**
+ * A station from any provider (only the fields the app uses). The field names follow the Radio
+ * Browser API, which also makes them the favorites file format.
+ */
 @Serializable
 data class Station(
+    /** Radio Browser's station uuid, or `<provider>:<id>` for stations from other providers. */
     @SerialName("stationuuid") val uuid: String,
     val name: String = "",
     val url: String = "",
@@ -25,10 +29,17 @@ data class Station(
 ) {
     val streamUrl: String get() = urlResolved.ifBlank { url }
 
+    /** Id of the provider this station came from. */
+    val providerId: String get() = providerOf(uuid)
+
     val displayName: String get() = name.trim().ifBlank { "Unnamed station" }
 
     val tagList: List<String>
         get() = tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+    /** The station's languages, lower case, e.g. "english,hindi" → [english, hindi]. */
+    val languageList: List<String>
+        get() = language.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
 
     /** "Germany · German" style line; empty when unknown. */
     val placeLine: String
@@ -47,4 +58,17 @@ data class Station(
             if (genres.isNotEmpty()) append(". ").append(genres.joinToString(", "))
             append('.')
         }
+
+    companion object {
+        /** Radio Browser stations keep their plain uuid as id, so older favorites and links still work. */
+        const val RADIO_BROWSER = "radiobrowser"
+
+        fun id(provider: String, localId: String): String = "$provider:$localId"
+
+        fun providerOf(stationId: String): String =
+            if (':' in stationId) stationId.substringBefore(':') else RADIO_BROWSER
+
+        /** The provider's own id for a station, e.g. "somafm:groovesalad" → "groovesalad". */
+        fun localIdOf(stationId: String): String = stationId.substringAfter(':')
+    }
 }

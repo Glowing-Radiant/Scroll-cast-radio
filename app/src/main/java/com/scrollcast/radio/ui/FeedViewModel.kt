@@ -16,6 +16,13 @@ import com.scrollcast.radio.data.CatalogEntry
 import com.scrollcast.radio.data.FeedPrefs
 import com.scrollcast.radio.data.ShareLinks
 import com.scrollcast.radio.data.Station
+import com.scrollcast.radio.data.providers.GitHubEntry
+import com.scrollcast.radio.data.providers.GitHubFolder
+import com.scrollcast.radio.data.providers.GitHubLinks
+import com.scrollcast.radio.data.providers.Playlists
+import com.scrollcast.radio.data.providers.StationProvider
+import com.scrollcast.radio.data.providers.UserSource
+import com.scrollcast.radio.data.providers.UserSources
 import androidx.media3.common.C
 import com.scrollcast.radio.playback.AudioCapabilities
 import com.scrollcast.radio.playback.PlaybackService
@@ -80,6 +87,20 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _options = MutableStateFlow<Map<OptionKind, OptionsState>>(emptyMap())
     val options: StateFlow<Map<OptionKind, OptionsState>> = _options.asStateFlow()
+
+    /** The built-in station directories, in Settings order. */
+    val builtInProviders: List<StationProvider> = graph.providers.builtIn
+
+    /** Station lists the user added by link. */
+    val userSources: StateFlow<List<UserSource>> = graph.userSources.sources
+
+    private val _addSource = MutableStateFlow<AddSourceState>(AddSourceState.Idle)
+    val addSource: StateFlow<AddSourceState> = _addSource.asStateFlow()
+
+    /** The providers the feed currently draws from (saved settings, not the draft). */
+    val feedSources: StateFlow<Set<String>> = graph.settings.feed
+        .map { it.sources }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, graph.settings.feed.value.sources)
 
     /** The typed mood currently shaping the feed, if any. */
     val mood: StateFlow<String?> = graph.settings.feed
@@ -264,12 +285,63 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         c.resume()
     }
 
-    fun openSharedStation(uuid: String) {
+    /** Opens an incoming app link: plays a shared station, or offers to add a shared source. */
+    fun openLink(target: ShareLinks.Target) = when (target) {
+        is ShareLinks.Target.StationLink -> openSharedStation(target)
+        is ShareLinks.Target.SourceLink -> {
+            _sourceOffer.value = target
+            announce("Someone shared a station list${target.name?.let { ": $it" }.orEmpty()}. Add it?")
+        }
+    }
+
+    private fun openSharedStation(link: ShareLinks.Target.StationLink) {
         viewModelScope.launch {
-            val station = graph.feed.stationById(uuid)
+            // A station from someone's own source isn't in any directory; the link carries its stream.
+            val station = graph.feed.stationById(link.id) ?: link.toStation()
             if (station == null) announce("Couldn't find the shared station.") else play(station)
         }
     }
+
+    private val _sourceOffer = MutableStateFlow<ShareLinks.Target.SourceLink?>(null)
+    /** A source shared by link, waiting for the user to add it or not. */
+    val sourceOffer: StateFlow<ShareLinks.Target.SourceLink?> = _sourceOffer.asStateFlow()
+
+    fun declineSourceOffer() {
+        _sourceOffer.value = null
+    }
+
+    /** Adds the shared source and puts it straight into the feed. */
+    fun acceptSourceOffer() {
+        val offer = _sourceOffer.value ?: return
+        _sourceOffer.value = null
+        announce("Reading the station list.")
+        viewModelScope.launch {
+            runCatching { graph.userSources.add(offer.url, offer.name ?: Playlists.nameFromUrl(offer.url)) }.fold(
+                onSuccess = { result ->
+                    val source = when (result) {
+                        is UserSources.AddResult.Added -> result.source
+                        is UserSources.AddResult.AlreadyAdded -> result.source
+                    }
+                    val saved = graph.settings.feed.value
+                    if (source.id !in saved.sources) {
+                        announcedId = null
+                        graph.settings.setFeed(saved.copy(sources = saved.sources + source.id))
+                    }
+                    announce(
+                        when (result) {
+                            is UserSources.AddResult.Added ->
+                                "Added ${source.name} with ${stationCount(result.stations)}. Its stations are joining your feed."
+                            is UserSources.AddResult.AlreadyAdded -> "${source.name} is already one of your sources. It's switched on."
+                        }
+                    )
+                },
+                onFailure = { announce(it.message ?: "Couldn't read that station list.") },
+            )
+        }
+    }
+
+    fun sourceShareText(source: UserSource): String =
+        ShareLinks.sourceShareText(BuildConfig.SHARE_BASE_URL, source.url, source.name)
 
     // --- Feed / Favorites switching -----------------------------------------------------------
 
@@ -334,14 +406,132 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startEditingSettings() {
         _draft.value = graph.settings.feed.value
+        _options.value = emptyMap()
+        refreshDetectedLanguage()
+    }
+
+    private fun refreshDetectedLanguage() {
+        val sources = _draft.value.sources
         viewModelScope.launch {
-            _detectedLanguage.value = graph.catalog.languageForIso(graph.region.languageCode())
+            _detectedLanguage.value = graph.catalog.languageForIso(graph.region.languageCode(), sources)
         }
     }
 
     fun editDraft(change: (FeedPrefs) -> FeedPrefs) {
         _draft.value = change(_draft.value)
     }
+
+    /**
+     * Turns a provider on or off in the draft. The last one can't be turned off, since the feed
+     * needs somewhere to find stations.
+     */
+    fun setSource(id: String, name: String, on: Boolean) {
+        val current = _draft.value.sources
+        val next = if (on) current + id else current - id
+        if (next.isEmpty()) {
+            announce("Keep at least one source on.")
+            return
+        }
+        if (next == current) return
+        _draft.value = _draft.value.copy(sources = next)
+        // Region, language and genre lists depend on the providers.
+        _options.value = emptyMap()
+        refreshDetectedLanguage()
+        announce(if (on) "$name on." else "$name off.")
+    }
+
+    /** "Radio Browser, SomaFM": the chosen sources, for the Settings menu. */
+    fun sourceNames(ids: Set<String>): String = graph.providers.enabled(ids).joinToString(", ") { it.name }
+
+    // --- User sources ---------------------------------------------------------------------------
+
+    fun resetAddSource() {
+        _addSource.value = AddSourceState.Idle
+    }
+
+    /**
+     * Adds the playlist behind a typed or pasted link. A GitHub repository or folder opens for
+     * browsing instead, so the user can pick one of its playlist files.
+     */
+    fun submitSourceLink(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val link = if ("://" in trimmed) trimmed else "https://$trimmed"
+        when (val target = GitHubLinks.parse(link)) {
+            is GitHubLinks.Target.Folder -> openSourceFolder(target.folder)
+            is GitHubLinks.Target.File -> addUserSource(target.rawUrl, target.name)
+            null -> addUserSource(link, Playlists.nameFromUrl(link))
+        }
+    }
+
+    fun openSourceFolder(folder: GitHubFolder) {
+        _addSource.value = AddSourceState.Working("Opening ${folder.title}…")
+        announce("Opening ${folder.title}.")
+        viewModelScope.launch {
+            _addSource.value = runCatching { graph.userSources.browse(folder) }.fold(
+                onSuccess = { entries ->
+                    val files = entries.count { !it.isFolder }
+                    val folders = entries.size - files
+                    announce("${folder.title}: $folders ${if (folders == 1) "folder" else "folders"}, $files ${if (files == 1) "playlist" else "playlists"}.")
+                    AddSourceState.Browsing(folder, entries)
+                },
+                onFailure = { fail(it.message ?: "Couldn't open that repository.") },
+            )
+        }
+    }
+
+    fun pickSourceEntry(folder: GitHubFolder, entry: GitHubEntry) {
+        if (entry.isFolder) {
+            openSourceFolder(folder.copy(path = entry.path))
+        } else {
+            val name = if (entry.title != entry.name) "${folder.repo} · ${entry.title}" else GitHubLinks.sourceName(folder.repo, entry.name)
+            addUserSource(entry.downloadUrl ?: return, name)
+        }
+    }
+
+    private fun addUserSource(url: String, name: String) {
+        _addSource.value = AddSourceState.Working("Reading the station list…")
+        announce("Reading the station list.")
+        viewModelScope.launch {
+            _addSource.value = runCatching { graph.userSources.add(url, name) }.fold(
+                onSuccess = { result ->
+                    when (result) {
+                        is UserSources.AddResult.Added -> {
+                            // A source you just added is one you want to hear.
+                            _draft.value = _draft.value.copy(sources = _draft.value.sources + result.source.id)
+                            _options.value = emptyMap()
+                            refreshDetectedLanguage()
+                            announce("Added ${result.source.name} with ${stationCount(result.stations)}. It's switched on.")
+                            AddSourceState.Added(result.source)
+                        }
+                        is UserSources.AddResult.AlreadyAdded -> fail("${result.source.name} is already one of your sources.")
+                    }
+                },
+                onFailure = { fail(it.message ?: "Couldn't read that link.") },
+            )
+        }
+    }
+
+    private fun fail(message: String): AddSourceState {
+        announce(message)
+        return AddSourceState.Failed(message)
+    }
+
+    /** Removes a user source and stops the feed using it. */
+    fun removeUserSource(source: UserSource) {
+        graph.userSources.remove(source.id)
+        _draft.value = _draft.value.copy(sources = (_draft.value.sources - source.id).ifEmpty { FeedPrefs.DEFAULT_SOURCES })
+        val saved = graph.settings.feed.value
+        if (source.id in saved.sources) {
+            graph.settings.setFeed(saved.copy(sources = (saved.sources - source.id).ifEmpty { FeedPrefs.DEFAULT_SOURCES }))
+        }
+        _options.value = emptyMap()
+        announce("Removed ${source.name}.")
+    }
+
+    /** Which provider a station came from, when the feed mixes more than that one. */
+    fun sourceName(station: Station, sources: Set<String>): String? =
+        graph.providers.forStation(station.uuid)?.takeUnless { sources == setOf(it.id) }?.name
 
     /** Saves the draft; the playback service rebuilds the feed when settings change. */
     fun commitSettings() {
@@ -416,14 +606,17 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         val current = _options.value[kind]
         if (current is OptionsState.Loaded || current is OptionsState.Loading) return
         _options.value += kind to OptionsState.Loading
+        val sources = _draft.value.sources
         viewModelScope.launch {
             val result = runCatching {
                 when (kind) {
-                    OptionKind.Region -> graph.catalog.countries()
-                    OptionKind.Language -> graph.catalog.languages()
-                    OptionKind.Genre -> graph.catalog.genres()
+                    OptionKind.Region -> graph.catalog.countries(sources)
+                    OptionKind.Language -> graph.catalog.languages(sources)
+                    OptionKind.Genre -> graph.catalog.genres(sources)
                 }
             }
+            // The sources changed while loading: this list is for the old ones.
+            if (_draft.value.sources != sources) return@launch
             _options.value += kind to result.fold({ OptionsState.Loaded(it) }, { OptionsState.Failed })
         }
     }
@@ -440,4 +633,14 @@ sealed interface OptionsState {
     data object Loading : OptionsState
     data object Failed : OptionsState
     data class Loaded(val entries: List<CatalogEntry>) : OptionsState
+}
+
+/** Progress of adding a source in Settings. */
+sealed interface AddSourceState {
+    data object Idle : AddSourceState
+    data class Working(val message: String) : AddSourceState
+    data class Failed(val message: String) : AddSourceState
+    /** Showing a GitHub folder to pick a playlist from. */
+    data class Browsing(val folder: GitHubFolder, val entries: List<GitHubEntry>) : AddSourceState
+    data class Added(val source: UserSource) : AddSourceState
 }

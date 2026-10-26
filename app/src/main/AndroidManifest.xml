@@ -31,15 +31,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- scrollcast://station/<uuid> -->
+            <!-- scrollcast://station/<station id>, scrollcast://source?url=<station list> -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="scrollcast" android:host="station" />
+                <data android:scheme="scrollcast" android:host="source" />
             </intent-filter>
 
-            <!-- https://<pages site>/s/?id=<uuid> -->
+            <!-- https://<pages site>/s/?id=<station id> or ?source=<list> -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

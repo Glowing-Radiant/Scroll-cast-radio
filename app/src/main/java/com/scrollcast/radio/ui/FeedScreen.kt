@@ -138,6 +138,7 @@ fun FeedScreen(
 @Composable
 fun StationPager(vm: FeedViewModel, state: PlayerUiState) {
     val favoriteIds by vm.favoriteIds.collectAsStateWithLifecycle()
+    val sources by vm.feedSources.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var shareTarget by remember { mutableStateOf<Station?>(null) }
     val pagerState = rememberPagerState(initialPage = state.currentIndex) { state.stations.size }
@@ -169,6 +170,7 @@ fun StationPager(vm: FeedViewModel, state: PlayerUiState) {
         val isCurrent = page == state.currentIndex
         StationPage(
             station = station,
+            source = vm.sourceName(station, sources),
             status = when {
                 !isCurrent -> PlayStatus.Paused
                 state.hasError -> PlayStatus.Failed
@@ -204,6 +206,8 @@ enum class PlayStatus(val spoken: String) {
 @Composable
 private fun StationPage(
     station: Station,
+    /** The provider's name, shown when the feed mixes several; null otherwise. */
+    source: String?,
     status: PlayStatus,
     isFavorite: Boolean,
     onTogglePlay: () -> Unit,
@@ -266,6 +270,10 @@ private fun StationPage(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            if (source != null) {
+                Spacer(Modifier.height(6.dp))
+                Text("From $source", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
             }
             Spacer(Modifier.height(40.dp))
             Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
@@ -427,10 +435,10 @@ fun AnnouncementRegion(vm: FeedViewModel, modifier: Modifier = Modifier) {
     )
 }
 
-fun shareText(context: Context, text: String) {
+fun shareText(context: Context, text: String, title: String = "Share station") {
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, text)
     }
-    context.startActivity(Intent.createChooser(send, "Share station"))
+    context.startActivity(Intent.createChooser(send, title))
 }

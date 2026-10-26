@@ -28,7 +28,7 @@ fun Station.toMediaItem(queue: QueueMode = QueueMode.Feed): MediaItem {
         .build()
 }
 
-/** The Radio Browser station uuid behind this item. */
+/** The station id behind this item. */
 val MediaItem.stationId: String get() = mediaId.removePrefix(FAVORITES_PREFIX)
 
 val MediaItem.queue: QueueMode

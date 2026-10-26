@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,16 +58,29 @@ import com.scrollcast.radio.data.AudioPrefs
 import com.scrollcast.radio.data.CatalogEntry
 import com.scrollcast.radio.data.Mix
 import com.scrollcast.radio.data.RegionDetector
+import com.scrollcast.radio.update.UpdateState
 import java.text.NumberFormat
+
+/** The settings categories; each opens a page of its own so no page gets crowded. */
+private enum class SettingsSection(val title: String) {
+    Sources("Stations from"),
+    Feed("Feed"),
+    Audio("Audio"),
+    App("App"),
+}
 
 @Composable
 fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
     val draft by vm.draft.collectAsStateWithLifecycle()
     val detectedLanguage by vm.detectedLanguage.collectAsStateWithLifecycle()
+    val userSources by vm.userSources.collectAsStateWithLifecycle()
+    var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
     var picking by rememberSaveable { mutableStateOf<OptionKind?>(null) }
     var pickingEqualizer by rememberSaveable { mutableStateOf(false) }
+    var addingSource by rememberSaveable { mutableStateOf(false) }
     val audio by vm.audio.collectAsStateWithLifecycle()
     val audioCaps by vm.audioCapabilities.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
 
     BackHandler(onBack = onClose)
 
@@ -79,6 +93,11 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
             onPick = { vm.setEqualizer(it); pickingEqualizer = false },
             onClose = { pickingEqualizer = false },
         )
+        return
+    }
+
+    if (addingSource) {
+        AddSourceScreen(vm, onClose = { addingSource = false })
         return
     }
 
@@ -120,22 +139,20 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
 
     val regionName = (draft.countryCode ?: vm.detectedCountry)?.let(RegionDetector::countryName)
     val languageName = (draft.language ?: detectedLanguage)?.capitalized()
+    val hasAudio = audioCaps.evenLoudness || audioCaps.bassBoost || audioCaps.equalizer
+    val equalizerName = when (audio.equalizer) {
+        AudioPrefs.EQ_OFF -> "Off"
+        AudioPrefs.EQ_VOICE -> "Voice clarity"
+        else -> audio.equalizer
+    }
 
-    Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
-            .semantics { paneTitle = "Settings" },
-    ) {
-        ScreenHeader(title = "Settings", onBack = onClose)
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
-        ) {
-            Text(
-                "Feed changes apply when you leave this screen. Audio changes apply right away.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    when (section) {
+        SettingsSection.Sources -> SettingsPage(SettingsSection.Sources.title, onBack = { section = null }) {
+            SourcesSection(vm, draft.sources, userSources, onAdd = { vm.resetAddSource(); addingSource = true })
+        }
 
-            SectionHeading("Region")
+        SettingsSection.Feed -> SettingsPage(SettingsSection.Feed.title, onBack = { section = null }) {
+            SectionHeading("Region", first = true)
             ChoiceButton(
                 label = "Region",
                 value = if (draft.countryCode == null) "Automatic · ${regionName ?: "not detected"}" else regionName.orEmpty(),
@@ -175,41 +192,113 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
                 value = draft.genre?.capitalized() ?: "Any genre",
                 onClick = { picking = OptionKind.Genre },
             )
+        }
 
-            if (audioCaps.evenLoudness || audioCaps.bassBoost || audioCaps.equalizer) {
-                SectionHeading("Audio")
-                if (audioCaps.evenLoudness) {
-                    SwitchRow(
-                        title = "Even out loudness",
-                        description = "Keeps every station at a similar volume.",
-                        checked = audio.evenLoudness,
-                        onChange = vm::setEvenLoudness,
-                    )
-                }
-                if (audioCaps.bassBoost) {
-                    SwitchRow(
-                        title = "Bass boost",
-                        description = "Fuller low end, best with headphones.",
-                        checked = audio.bassBoost,
-                        onChange = vm::setBassBoost,
-                    )
-                }
-                if (audioCaps.equalizer) {
-                    Spacer(Modifier.height(8.dp))
-                    ChoiceButton(
-                        label = "Equalizer",
-                        value = when (audio.equalizer) {
-                            AudioPrefs.EQ_OFF -> "Off"
-                            AudioPrefs.EQ_VOICE -> "Voice clarity"
-                            else -> audio.equalizer
-                        },
-                        onClick = { pickingEqualizer = true },
-                    )
-                }
+        SettingsSection.Audio -> SettingsPage(SettingsSection.Audio.title, onBack = { section = null }) {
+            Text(
+                "Audio changes apply right away.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            if (audioCaps.evenLoudness) {
+                SwitchRow(
+                    title = "Even out loudness",
+                    description = "Keeps every station at a similar volume.",
+                    checked = audio.evenLoudness,
+                    onChange = vm::setEvenLoudness,
+                )
             }
+            if (audioCaps.bassBoost) {
+                SwitchRow(
+                    title = "Bass boost",
+                    description = "Fuller low end, best with headphones.",
+                    checked = audio.bassBoost,
+                    onChange = vm::setBassBoost,
+                )
+            }
+            if (audioCaps.equalizer) {
+                Spacer(Modifier.height(8.dp))
+                ChoiceButton(label = "Equalizer", value = equalizerName, onClick = { pickingEqualizer = true })
+            }
+        }
 
-            SectionHeading("App")
+        SettingsSection.App -> SettingsPage(SettingsSection.App.title, onBack = { section = null }) {
             UpdateSection(vm)
+        }
+
+        null -> SettingsPage("Settings", onBack = onClose) {
+            Text(
+                "Feed changes apply when you leave Settings.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 16.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Sources first: they decide which regions, languages and genres there are to pick.
+                ChoiceButton(
+                    label = SettingsSection.Sources.title,
+                    value = vm.sourceNames(draft.sources),
+                    clickLabel = "Open",
+                    onClick = { section = SettingsSection.Sources },
+                )
+                ChoiceButton(
+                    label = SettingsSection.Feed.title,
+                    value = listOf(
+                        when (draft.regionMix) {
+                            Mix.Only -> "Only ${regionName ?: "your region"}"
+                            Mix.Bias -> "Mostly ${regionName ?: "your region"}"
+                            Mix.Mixed -> "Worldwide"
+                        },
+                        when (draft.languageMix) {
+                            Mix.Only -> "only ${languageName ?: "your language"}"
+                            Mix.Bias -> "mostly ${languageName ?: "your language"}"
+                            Mix.Mixed -> "any language"
+                        },
+                        draft.genre?.capitalized() ?: "any genre",
+                    ).joinToString(" · "),
+                    clickLabel = "Open",
+                    onClick = { section = SettingsSection.Feed },
+                )
+                if (hasAudio) {
+                    val on = listOfNotNull(
+                        "Even loudness".takeIf { audioCaps.evenLoudness && audio.evenLoudness },
+                        "Bass boost".takeIf { audioCaps.bassBoost && audio.bassBoost },
+                        "Equalizer: $equalizerName".takeIf { audioCaps.equalizer && audio.equalizer != AudioPrefs.EQ_OFF },
+                    )
+                    ChoiceButton(
+                        label = SettingsSection.Audio.title,
+                        value = on.joinToString(" · ").ifEmpty { "All off" },
+                        clickLabel = "Open",
+                        onClick = { section = SettingsSection.Audio },
+                    )
+                }
+                ChoiceButton(
+                    label = SettingsSection.App.title,
+                    value = when (val u = update) {
+                        is UpdateState.Available -> "Version ${vm.versionName} · update to ${u.info.version} available"
+                        else -> "Version ${vm.versionName} · updates"
+                    },
+                    clickLabel = "Open",
+                    onClick = { section = SettingsSection.App },
+                )
+            }
+        }
+    }
+}
+
+/** A full-screen settings page with a back button and scrolling content. */
+@Composable
+internal fun SettingsPage(title: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    BackHandler(onBack = onBack)
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().semantics { paneTitle = title },
+    ) {
+        ScreenHeader(title = title, onBack = onBack)
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+        ) {
+            content()
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -217,9 +306,15 @@ fun SettingsScreen(vm: FeedViewModel, onClose: () -> Unit) {
 
 /** An on/off setting: the whole row is one switch for TalkBack. */
 @Composable
-private fun SwitchRow(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun SwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
             .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
@@ -259,18 +354,18 @@ private fun ListPicker(
 private data class MixOption(val mix: Mix, val title: String, val description: String)
 
 @Composable
-private fun SectionHeading(text: String) {
+internal fun SectionHeading(text: String, first: Boolean = false) {
     Text(
         text,
         style = MaterialTheme.typography.titleLarge,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(top = 28.dp, bottom = 12.dp).semantics { heading() },
+        modifier = Modifier.padding(top = if (first) 8.dp else 28.dp, bottom = 12.dp).semantics { heading() },
     )
 }
 
-/** A button that shows the current choice and opens the list of options. */
+/** A button that shows the current choice and opens the list of options (or a settings page). */
 @Composable
-private fun ChoiceButton(label: String, value: String, onClick: () -> Unit) {
+internal fun ChoiceButton(label: String, value: String, onClick: () -> Unit, clickLabel: String = "Change $label") {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -278,7 +373,7 @@ private fun ChoiceButton(label: String, value: String, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
-            .clickable(onClickLabel = "Change $label", role = Role.Button, onClick = onClick),
+            .clickable(onClickLabel = clickLabel, role = Role.Button, onClick = onClick),
     ) {
         Row(
             Modifier.padding(horizontal = 16.dp, vertical = 12.dp).semantics(mergeDescendants = true) {},
@@ -394,7 +489,7 @@ private fun OptionRow(title: String, subtitle: String?, selected: Boolean, onCli
 }
 
 @Composable
-private fun CenteredMessage(text: String, action: @Composable () -> Unit) {
+internal fun CenteredMessage(text: String, action: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
             action()
@@ -407,7 +502,7 @@ private fun CenteredMessage(text: String, action: @Composable () -> Unit) {
     }
 }
 
-private fun stationCount(count: Int): String =
+internal fun stationCount(count: Int): String =
     if (count == 1) "1 station" else "${NumberFormat.getIntegerInstance().format(count)} stations"
 
 private fun String.capitalized(): String =

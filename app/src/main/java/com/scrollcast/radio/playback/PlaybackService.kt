@@ -12,11 +12,13 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.util.EventLogger
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.scrollcast.radio.AppGraph
+import com.scrollcast.radio.BuildConfig
 import com.scrollcast.radio.appGraph
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
@@ -44,7 +46,7 @@ class PlaybackService : MediaSessionService() {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(10_000)
             .setReadTimeoutMs(15_000)
-        val player = ExoPlayer.Builder(this)
+        val player = ExoPlayer.Builder(this, AudioOnly.RenderersFactory(this))
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, http)))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -56,7 +58,11 @@ class PlaybackService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        // TV channels and other video streams play their sound only.
+        AudioOnly(player).attach()
         player.addListener(PlayerEvents(player))
+        // Dev builds log formats, loads and errors to logcat (tag EventLogger).
+        if (BuildConfig.DEBUG) player.addAnalyticsListener(EventLogger())
 
         // A fixed audio session lets the optional enhancements (Settings → Audio) attach to it.
         val audioSession = getSystemService(AudioManager::class.java).generateAudioSessionId()

@@ -34,51 +34,121 @@
     <audio id="audio" controls preload="none" aria-label="Station stream"></audio>
   </div>
   <a class="btn secondary" id="stream" href="#" hidden>Open stream in another player</a>
-  <p class="small">Stations come from the community-run Radio Browser directory.</p>
+  <p class="small">Stations come from Radio Browser, SomaFM, Radio Paradise, laut.fm and lists listeners share.</p>
 </main>
 <script>
 (function () {
   var PACKAGE = "com.scrollcast.radio";
   var MIRRORS = ["de1.api.radio-browser.info", "de2.api.radio-browser.info", "all.api.radio-browser.info"];
-  var id = new URLSearchParams(location.search).get("id") || "";
-  var valid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  var params = new URLSearchParams(location.search);
+  var id = params.get("id") || "";
+  var sharedName = params.get("n") || "";
+  var sharedStream = params.get("u") || "";
+  var source = params.get("source") || "";
+  var isWeb = function (url) { return /^https?:\/\//i.test(url); };
+  var isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  // Stations from other providers have ids like "somafm:groovesalad"; stations from someone's
+  // own source ("user-…") aren't in any directory, so their link carries the name and stream.
+  var provider = isUuid ? "radiobrowser"
+    : /^user-[0-9a-f]{8}:[0-9a-f]{12}$/.test(id) && isWeb(sharedStream) ? "user"
+    : (id.match(/^(somafm|radioparadise|lautfm):[A-Za-z0-9._-]{1,100}$/) || [])[1];
+  var localId = id.substring(id.indexOf(":") + 1);
+  var isSource = isWeb(source);
   var nameEl = document.getElementById("name");
   var metaEl = document.getElementById("meta");
   var openApp = document.getElementById("open-app");
 
-  if (!valid) {
+  if (!provider && !isSource) {
     nameEl.textContent = "This station link isn't valid.";
     openApp.hidden = true;
     return;
   }
 
+  // The app gets the same details the page did: scrollcast://station/<id>?… or scrollcast://source?….
+  var appPath = isSource
+    ? "source?url=" + encodeURIComponent(source) + "&n=" + encodeURIComponent(sharedName)
+    : "station/" + id + (provider === "user"
+      ? "?n=" + encodeURIComponent(sharedName) + "&u=" + encodeURIComponent(sharedStream) : "");
   var isAndroid = /android/i.test(navigator.userAgent);
-  var schemeUrl = "scrollcast://station/" + id;
   openApp.href = isAndroid
-    ? "intent://station/" + id + "#Intent;scheme=scrollcast;package=" + PACKAGE +
+    ? "intent://" + appPath + "#Intent;scheme=scrollcast;package=" + PACKAGE +
       ";S.browser_fallback_url=" + encodeURIComponent(location.href.split("#")[0] + "#noapp") + ";end"
-    : schemeUrl;
+    : "scrollcast://" + appPath;
   if (!isAndroid) openApp.hidden = true;
 
   // Try the app straight away on Android, unless we just came back from a failed attempt.
   if (isAndroid && location.hash !== "#noapp") location.href = openApp.href;
 
-  function fetchStation(i) {
-    if (i >= MIRRORS.length) return Promise.reject(new Error("unreachable"));
-    return fetch("https://" + MIRRORS[i] + "/json/stations/byuuid/" + id)
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .catch(function () { return fetchStation(i + 1); });
+  if (isSource) {
+    var listName = sharedName || source.replace(/^https?:\/\//, "").split(/[?#]/)[0];
+    document.title = listName + " · Scroll Cast Radio";
+    nameEl.textContent = listName;
+    metaEl.textContent = "A station list for Scroll Cast Radio. Open it in the app to add its stations to your feed.";
+    openApp.textContent = "Add to Scroll Cast Radio";
+    var list = document.getElementById("stream");
+    list.textContent = "Open the list";
+    list.href = source;
+    list.hidden = false;
+    return;
   }
 
-  fetchStation(0).then(function (list) {
-    var s = list && list[0];
-    if (!s) { nameEl.textContent = "Station not found."; return; }
+  function getJson(url) {
+    return fetch(url).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+  }
+
+  function fromRadioBrowser(i) {
+    if (i >= MIRRORS.length) return Promise.reject(new Error("unreachable"));
+    return getJson("https://" + MIRRORS[i] + "/json/stations/byuuid/" + id)
+      .then(function (list) {
+        var s = list && list[0];
+        return s && { name: s.name, place: s.country, tags: (s.tags || "").split(","), stream: s.url_resolved || s.url };
+      }, function () { return fromRadioBrowser(i + 1); });
+  }
+
+  // Radio Paradise has no station API; these match the app's channel list.
+  var PARADISE = {
+    "main-mix": ["Radio Paradise Main Mix", "aac-128"],
+    "mellow": ["Radio Paradise Mellow Mix", "mellow-128"],
+    "rock": ["Radio Paradise Rock Mix", "rock-128"],
+    "global": ["Radio Paradise Global Mix", "global-128"],
+    "beyond": ["Radio Paradise Beyond", "beyond-128"],
+    "serenity": ["Radio Paradise Serenity", "serenity"],
+    "kfat": ["KFAT on Radio Paradise", "kfat-128"]
+  };
+
+  // Each returns { name, place, tags, stream }, or nothing when the station doesn't exist.
+  var LOADERS = {
+    radiobrowser: function () { return fromRadioBrowser(0); },
+    user: function () {
+      return Promise.resolve({ name: sharedName, place: "Shared station", tags: [], stream: sharedStream });
+    },
+    somafm: function () {
+      return getJson("https://api.somafm.com/channels.json").then(function (data) {
+        var c = (data.channels || []).filter(function (c) { return c.id === localId; })[0];
+        return c && { name: c.title, place: "SomaFM", tags: (c.genre || "").split("|"),
+                      stream: "https://ice1.somafm.com/" + c.id + "-128-mp3" };
+      });
+    },
+    radioparadise: function () {
+      var c = PARADISE[localId];
+      return Promise.resolve(c && { name: c[0], place: "Radio Paradise", tags: [],
+                                    stream: "https://stream.radioparadise.com/" + c[1] });
+    },
+    lautfm: function () {
+      return getJson("https://api.laut.fm/station/" + encodeURIComponent(localId)).then(function (s) {
+        return s && { name: s.display_name || s.name, place: "laut.fm", tags: s.genres || [], stream: s.stream_url };
+      });
+    }
+  };
+
+  LOADERS[provider]().then(function (s) {
+    if (!s || !s.stream) { nameEl.textContent = "Station not found."; return; }
     var name = (s.name || "Unnamed station").trim();
     document.title = name + " · Scroll Cast Radio";
     nameEl.textContent = name;
-    metaEl.textContent = [s.country, (s.tags || "").split(",").slice(0, 3).join(", ")]
+    metaEl.textContent = [s.place, s.tags.slice(0, 3).join(", ")]
       .filter(Boolean).join(" · ");
-    var stream = s.url_resolved || s.url;
+    var stream = s.stream;
     var link = document.getElementById("stream");
     link.href = stream;
     link.hidden = false;

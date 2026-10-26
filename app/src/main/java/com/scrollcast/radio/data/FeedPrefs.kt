@@ -35,7 +35,13 @@ data class FeedPrefs(
     val genre: String? = null,
     /** Free-text mood such as "romantic hindi"; while set it reshapes the whole feed. */
     val mood: String? = null,
-)
+    /** Ids of the providers the feed draws from; with several, their stations are mixed. */
+    val sources: Set<String> = DEFAULT_SOURCES,
+) {
+    companion object {
+        val DEFAULT_SOURCES = setOf(Station.RADIO_BROWSER)
+    }
+}
 
 /** Settings with "automatic" and the mood resolved to concrete query values. */
 data class ResolvedPrefs(
@@ -76,6 +82,7 @@ class SettingsStore(context: Context) {
             languageMix = prefs.getString(KEY_LANGUAGE_MIX, null).toMix(Mix.Mixed),
             genre = prefs.optional(KEY_GENRE),
             mood = prefs.optional(KEY_MOOD),
+            sources = prefs.getStringSet(KEY_SOURCES, null)?.toSet()?.takeIf { it.isNotEmpty() } ?: FeedPrefs.DEFAULT_SOURCES,
         )
     )
     val feed: StateFlow<FeedPrefs> = _feed.asStateFlow()
@@ -106,6 +113,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_LANGUAGE_MIX, value.languageMix.name)
             .putString(KEY_GENRE, value.genre)
             .putString(KEY_MOOD, value.mood)
+            .putStringSet(KEY_SOURCES, value.sources)
             .apply()
         _feed.value = value
     }
@@ -123,6 +131,7 @@ class SettingsStore(context: Context) {
         const val KEY_LANGUAGE_MIX = "language_mix"
         const val KEY_GENRE = "genre"
         const val KEY_MOOD = "mood"
+        const val KEY_SOURCES = "sources"
         const val KEY_EVEN_LOUDNESS = "audio_even_loudness"
         const val KEY_BASS_BOOST = "audio_bass_boost"
         const val KEY_EQUALIZER = "audio_equalizer"

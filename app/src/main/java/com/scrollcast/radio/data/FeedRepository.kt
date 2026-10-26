@@ -1,5 +1,7 @@
 package com.scrollcast.radio.data
 
+import com.scrollcast.radio.data.providers.Providers
+import com.scrollcast.radio.data.providers.StationProvider
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -16,15 +18,16 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * Builds the endless random feed.
+ * Builds the endless random feed from the providers chosen in Settings.
  *
  * The region and language settings decide what share of each batch comes from which query
- * (e.g. "mostly India" = 70% Indian stations, 30% worldwide). Each query samples stations at
- * random, a slice of popular stations is added, and the whole lot is ordered by a weighted
- * shuffle so well-voted stations surface a bit more often without the feed becoming a chart.
+ * (e.g. "mostly India" = 70% Indian stations, 30% worldwide). Every chosen provider is asked
+ * each query, and each query's share is split evenly between the providers that have matching
+ * stations. Stations are picked by a weighted shuffle, so well-voted stations surface a bit more
+ * often without the feed becoming a chart.
  */
 class FeedRepository(
-    private val api: RadioBrowserClient,
+    private val providers: Providers,
     private val catalog: Catalog,
     private val settings: SettingsStore,
     private val region: RegionDetector,
@@ -55,10 +58,12 @@ class FeedRepository(
 
     fun resetServed() = served.clear()
 
-    suspend fun stationById(uuid: String): Station? =
-        stations[uuid] ?: runCatching { api.stationByUuid(uuid) }.getOrNull()?.also(::remember)
+    suspend fun stationById(uuid: String): Station? = stations[uuid]
+        ?: runCatching { providers.forStation(uuid)?.station(uuid) }.getOrNull()?.also(::remember)
 
-    suspend fun countClick(uuid: String) = api.countClick(uuid)
+    suspend fun countClick(uuid: String) {
+        runCatching { providers.forStation(uuid)?.reportPlay(uuid) }
+    }
 
     /**
      * Turns "automatic" settings into the detected country and the device language, then lets
@@ -70,12 +75,12 @@ class FeedRepository(
             countryCode = prefs.countryCode ?: region.countryCode(),
             regionMix = prefs.regionMix,
             language = prefs.language
-                ?: if (prefs.languageMix == Mix.Mixed) null else catalog.languageForIso(region.languageCode()),
+                ?: if (prefs.languageMix == Mix.Mixed) null else catalog.languageForIso(region.languageCode(), prefs.sources),
             languageMix = prefs.languageMix,
             genre = prefs.genre,
         )
         val keyword = prefs.mood?.trim()?.takeIf { it.isNotEmpty() } ?: return base
-        val mood = catalog.parseMood(keyword)
+        val mood = catalog.parseMood(keyword, prefs.sources)
         return base.copy(
             countryCode = mood.countryCode ?: base.countryCode,
             regionMix = if (mood.countryCode != null) Mix.Only else base.regionMix,
@@ -90,15 +95,17 @@ class FeedRepository(
     /** Returns the next stations for the feed, or an empty list (with [error] set) on failure. */
     suspend fun nextBatch(): List<Station> {
         _loading.value = true
+        val feedPrefs = settings.feed.value
+        val sources = providers.enabled(feedPrefs.sources)
         try {
-            val prefs = resolve(settings.feed.value)
-            var batch = fetchBatch(prefs)
-            if (batch.isEmpty() && prefs.moodKeyword != null) batch = moodFallback(prefs.moodKeyword)
+            val prefs = resolve(feedPrefs)
+            var batch = fetchBatch(prefs, sources)
+            if (batch.isEmpty() && prefs.moodKeyword != null) batch = moodFallback(prefs.moodKeyword, sources)
             if (batch.isEmpty() && served.isNotEmpty()) {
                 // A narrow feed (say, one small country only) has been played through: start over.
                 served.clear()
-                batch = fetchBatch(prefs)
-                if (batch.isEmpty() && prefs.moodKeyword != null) batch = moodFallback(prefs.moodKeyword)
+                batch = fetchBatch(prefs, sources)
+                if (batch.isEmpty() && prefs.moodKeyword != null) batch = moodFallback(prefs.moodKeyword, sources)
             }
             batch.forEach { remember(it); served += it.uuid }
             _error.value = when {
@@ -109,50 +116,56 @@ class FeedRepository(
             return batch
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            _error.value = "Couldn't reach Radio Browser. Check your connection and try again."
+            _error.value = "Couldn't reach ${providers.names(sources)}. Check your connection and try again."
             return emptyList()
         } finally {
             _loading.value = false
         }
     }
 
-    private suspend fun fetchBatch(prefs: ResolvedPrefs): List<Station> {
+    private suspend fun fetchBatch(prefs: ResolvedPrefs, sources: List<StationProvider>): List<Station> {
         val plan = planQueries(prefs, RANDOM_SAMPLE)
-        val candidates = coroutineScope {
-            val random = plan.map { (query, count) ->
-                async { runCatching { api.search(query, order = "random", limit = count) }.getOrNull() }
-            }
-            val popular = async { runCatching { popularSlice(plan.first().first) }.getOrDefault(emptyList()) }
-            val results = random.awaitAll()
-            // Only a total failure is an error; an empty narrow query just leaves room for the others.
-            if (results.all { it == null }) throw java.io.IOException("All station queries failed")
-            results.filterNotNull().flatten() + popular.await()
-        }
-        return pickBatch(candidates, served, BATCH_SIZE)
+        // The popular slice rides on the biggest query, as the feed's main flavour.
+        return mixBatch(sample(plan, sources, popularFirst = true), served, BATCH_SIZE)
     }
 
     /** Last resort for a mood: the keyword as a tag or in station names, anywhere in the world. */
-    private suspend fun moodFallback(keyword: String): List<Station> = coroutineScope {
-        val queries = listOf(
-            StationQuery(tag = keyword, tagExact = false),
-            StationQuery(name = keyword),
+    private suspend fun moodFallback(keyword: String, sources: List<StationProvider>): List<Station> {
+        val plan = listOf(
+            StationQuery(tag = keyword, tagExact = false) to RANDOM_SAMPLE,
+            StationQuery(name = keyword) to RANDOM_SAMPLE,
         )
-        val found = queries.map { q ->
-            async { runCatching { api.search(q, order = "random", limit = RANDOM_SAMPLE) }.getOrDefault(emptyList()) }
-        }.awaitAll().flatten()
-        pickBatch(found, served, BATCH_SIZE)
+        return runCatching { mixBatch(sample(plan, sources, popularFirst = false), served, BATCH_SIZE) }
+            .getOrDefault(emptyList())
     }
 
-    private suspend fun popularSlice(query: StationQuery): List<Station> {
-        val window = if (query == StationQuery()) 2000 else 60
-        val slice = api.search(query, order = "votes", reverse = true, limit = POPULAR_SAMPLE, offset = Random.nextInt(window))
-        return slice.ifEmpty { api.search(query, order = "votes", reverse = true, limit = POPULAR_SAMPLE) }
+    /**
+     * Asks every provider every query at once. Only a total failure is an error; a provider that
+     * can't be reached, or has nothing for a narrow query, just leaves room for the others.
+     */
+    private suspend fun sample(
+        plan: List<Pair<StationQuery, Int>>,
+        sources: List<StationProvider>,
+        popularFirst: Boolean,
+    ): List<QueryPart> = coroutineScope {
+        val pending = plan.mapIndexed { i, (query, count) ->
+            count to sources.map { p ->
+                async { runCatching { p.sample(query, count, popular = popularFirst && i == 0) }.getOrNull() }
+            }
+        }
+        val parts = pending.map { (count, results) -> count to results.awaitAll() }
+        if (parts.all { (_, results) -> results.all { it == null } }) {
+            throw java.io.IOException("All station queries failed")
+        }
+        parts.map { (count, results) -> QueryPart(count, results.map { it.orEmpty() }) }
     }
+
+    /** One query's candidates: [share] is its weight in the batch, one list per provider. */
+    data class QueryPart(val share: Int, val byProvider: List<List<Station>>)
 
     companion object {
         const val BATCH_SIZE = 15
         private const val RANDOM_SAMPLE = 45
-        private const val POPULAR_SAMPLE = 12
 
         /**
          * Splits [total] random picks across queries so the feed matches the region and language
@@ -184,6 +197,53 @@ class FeedRepository(
         private const val MIN_PER_QUERY = 4
 
         /**
+         * Fills a batch of [size] from the query parts. Each part gets its share of the batch,
+         * split evenly between the providers that have stations for it; a provider that runs
+         * short leaves its places to the others, and any places still empty are filled from
+         * whatever is left. The same stream listed by two providers is only taken once.
+         */
+        fun mixBatch(
+            parts: List<QueryPart>,
+            alreadyServed: Set<String>,
+            size: Int,
+            random: Random = Random.Default,
+        ): List<Station> {
+            val chosen = mutableListOf<Station>()
+            val takenIds = alreadyServed.toHashSet()
+            val takenStreams = HashSet<String>()
+
+            fun take(candidates: List<Station>, count: Int): Int {
+                val fresh = candidates.filter { it.uuid !in takenIds && streamKey(it) !in takenStreams }
+                val picked = pickBatch(fresh, emptySet(), count, random)
+                picked.forEach { takenIds += it.uuid; takenStreams += streamKey(it) }
+                chosen += picked
+                return picked.size
+            }
+
+            val totalShare = parts.sumOf { it.share }.coerceAtLeast(1)
+            for (part in parts) {
+                var places = (size.toDouble() * part.share / totalShare).roundToInt()
+                    .coerceAtMost(size - chosen.size)
+                val pools = part.byProvider.filter { it.isNotEmpty() }.toMutableList()
+                while (places > 0 && pools.isNotEmpty()) {
+                    val each = (places + pools.size - 1) / pools.size
+                    for (pool in pools.shuffled(random)) {
+                        if (places == 0) break
+                        val want = minOf(each, places)
+                        val got = take(pool, want)
+                        places -= got
+                        if (got < want) pools -= pool
+                    }
+                }
+            }
+            if (chosen.size < size) take(parts.flatMap { it.byProvider.flatten() }, size - chosen.size)
+            // Shuffle the batch so the providers and queries are interleaved.
+            return pickBatch(chosen, emptySet(), chosen.size, random)
+        }
+
+        private fun streamKey(station: Station) = station.streamUrl.trimEnd('/').lowercase()
+
+        /**
          * Drops unplayable, duplicate and already-served stations, then orders the rest with a
          * weighted random shuffle (Efraimidis–Spirakis) and returns the first [size].
          */
@@ -196,7 +256,7 @@ class FeedRepository(
             .asSequence()
             .filter { it.streamUrl.isNotBlank() && it.lastCheckOk == 1 && it.uuid !in alreadyServed }
             .distinctBy { it.uuid }
-            .distinctBy { it.streamUrl.trimEnd('/').lowercase() }
+            .distinctBy { streamKey(it) }
             .map { it to random.nextDouble().pow(1.0 / weight(it)) }
             .sortedByDescending { it.second }
             .take(size)
